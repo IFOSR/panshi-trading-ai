@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["image_path", "split", "labels"],
+  "properties": {
+    "image_path": {"type": "string"},
+    "split": {"enum": ["train", "validation", "test"]},
+    "labels": {"type": "object"}
+  },
+  "additionalProperties": false
+}
