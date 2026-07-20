@@ -91,3 +91,12 @@ def test_missing_idempotency_key_is_rejected() -> None:
     response = client.post(f"/v1/cases/{case_id}/analysis")
 
     assert response.status_code == 400
+
+
+def test_default_app_reads_database_url_from_environment(monkeypatch, tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'configured.db'}"
+    monkeypatch.setenv("TRADING_AGENT_DATABASE_URL", database_url)
+
+    app = create_app()
+
+    assert app.state.database_url == database_url

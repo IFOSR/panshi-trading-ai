@@ -10,8 +10,10 @@ dependencies = [
   "pydantic>=2.10",
   "pydantic-settings>=2.8",
   "python-multipart>=0.0.20",
+  "psycopg[binary]>=3.2",
   "redis>=6.0",
   "sqlalchemy>=2.0",
+  "temporalio>=1.15",
   "uvicorn>=0.35",
 ]
 

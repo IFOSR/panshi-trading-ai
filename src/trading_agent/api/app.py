@@ -1,4 +1,5 @@
 from hashlib import sha256
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,10 +31,15 @@ class PositionRequest(BaseModel):
 
 
 def create_app(
-    database_url: str = "sqlite+pysqlite:///./trading-agent.db",
+    database_url: str | None = None,
     storage_root: Path | None = None,
     vision_provider: VisionProvider | None = None,
 ) -> FastAPI:
+    database_url = (
+        database_url
+        or os.getenv("TRADING_AGENT_DATABASE_URL")
+        or "sqlite+pysqlite:///./trading-agent.db"
+    )
     engine = build_engine(database_url)
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
@@ -45,6 +51,7 @@ def create_app(
         fallback=KimiVisionProvider(),
     )
     app = FastAPI(title="China Futures Trading Agent")
+    app.state.database_url = database_url
 
     def require_key(value: str | None) -> str:
         if not value:
