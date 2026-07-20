@@ -3,13 +3,16 @@ name = "china-futures-trading-agent"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
+  "alembic>=1.16",
   "fastapi>=0.115",
   "httpx>=0.28",
   "numpy>=1.23",
   "pydantic>=2.10",
   "pydantic-settings>=2.8",
   "python-multipart>=0.0.20",
+  "redis>=6.0",
   "sqlalchemy>=2.0",
+  "uvicorn>=0.35",
 ]
 
 [project.optional-dependencies]
@@ -39,4 +42,3 @@ target-version = "py310"
 [tool.mypy]
 python_version = "3.10"
 packages = ["trading_agent"]
-

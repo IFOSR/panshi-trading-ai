@@ -93,12 +93,16 @@ class ScreenshotExtraction(StrictExtractionModel):
     def validate_cutoff_time(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        from datetime import datetime
+        from datetime import date, datetime
 
-        parsed = datetime.fromisoformat(value)
+        normalized = value.replace("/", "-")
+        if len(normalized) == 10:
+            date.fromisoformat(normalized)
+            return normalized
+        parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
             raise ValueError("cutoff_time must include timezone")
-        return value
+        return normalized
 
 
 def enforce_safe_usage(extraction: ScreenshotExtraction) -> EvidenceUsage:
@@ -132,10 +136,16 @@ class CodexVisionProvider:
         model: str = "gpt-5.6-sol",
         runner: Runner = _run,
         timeout_seconds: float = 120.0,
+        model_provider: str = "code-cli",
+        provider_base_url: str = "https://www.code-cli.cn/v1",
+        provider_env_key: str = "CODE_CLI_API_KEY",
     ) -> None:
         self.model = model
         self.runner = runner
         self.timeout_seconds = timeout_seconds
+        self.model_provider = model_provider
+        self.provider_base_url = provider_base_url
+        self.provider_env_key = provider_env_key
 
     def build_command(
         self,
@@ -156,6 +166,18 @@ class CodexVisionProvider:
             str(schema_path.parent),
             "--model",
             self.model,
+            "-c",
+            f'model_provider="{self.model_provider}"',
+            "-c",
+            f'model_providers.{self.model_provider}.name="{self.model_provider}"',
+            "-c",
+            f'model_providers.{self.model_provider}.base_url="{self.provider_base_url}"',
+            "-c",
+            f'model_providers.{self.model_provider}.wire_api="responses"',
+            "-c",
+            f"model_providers.{self.model_provider}.requires_openai_auth=false",
+            "-c",
+            f'model_providers.{self.model_provider}.env_key="{self.provider_env_key}"',
         ]
         for image_path in request.image_paths:
             command.extend(["--image", str(image_path)])
@@ -207,6 +229,8 @@ class CodexVisionProvider:
                 for key, value in os.environ.items()
                 if key in {"PATH", "HOME", "CODEX_HOME", "LANG", "LC_ALL", "TMPDIR"}
             }
+            if self.provider_env_key in os.environ:
+                environment[self.provider_env_key] = os.environ[self.provider_env_key]
             try:
                 completed = self.runner(
                     command,

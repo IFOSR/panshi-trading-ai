@@ -233,6 +233,8 @@ def test_codex_runs_in_isolated_directory_with_rules_disabled() -> None:
     assert captured["cwd"] != Path.cwd()
     assert command[-1] == "-"
     assert "中国期货交易截图证据抽取器" in str(captured["stdin"])
+    assert 'model_provider="code-cli"' in command
+    assert "CODE_CLI_API_KEY" in captured["env"]
 
 
 def test_unsafe_privacy_assessment_blocks_provider_before_runner() -> None:
@@ -329,3 +331,28 @@ def test_extraction_rejects_non_finite_indicator_values() -> None:
 
     with pytest.raises(ValidationError):
         BollExtraction.model_validate(payload)
+
+
+def test_visible_calendar_date_is_normalized_without_inventing_time() -> None:
+    payload = {
+        "image_role": "STATE_DAILY",
+        "instrument": None,
+        "contract": None,
+        "timeframe": "1d",
+        "cutoff_time": "2026/07/20",
+        "last_bar_closed": None,
+        "indicators": {
+            "boll": None,
+            "macd": None,
+            "volume": None,
+            "position_behavior": None,
+            "notes": [],
+        },
+        "observations": [],
+        "blocking_issues": ["BAR_CLOSE_UNKNOWN"],
+        "allowed_usage": "QUALITATIVE_ONLY",
+    }
+
+    extraction = ScreenshotExtraction.model_validate(payload)
+
+    assert extraction.cutoff_time == "2026-07-20"
