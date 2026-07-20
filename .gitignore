@@ -11,7 +11,11 @@ node_modules/
 web/.next/
 web/playwright-report/
 web/test-results/
+web/tsconfig.tsbuildinfo
 coverage/
 htmlcov/
 *.db
 *.sqlite3
+*.egg-info/
+data/
+artifacts/
