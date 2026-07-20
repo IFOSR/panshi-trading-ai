@@ -50,17 +50,22 @@ services:
     command: uvicorn trading_agent.api.app:app --host 0.0.0.0 --port 8000
     environment:
       TRADING_AGENT_ENABLE_ORDER_EXECUTION: "false"
+      TRADING_AGENT_DATABASE_URL: postgresql+psycopg://trading:trading-local-only@postgres:5432/trading_agent
     ports: ["8000:8000"]
     depends_on:
       postgres:
         condition: service_healthy
   worker:
     build: .
-    command: python -c "from trading_agent.workflows.worker import build_worker; build_worker()"
+    command: python -m trading_agent.workflows.worker
     environment:
       TRADING_AGENT_ENABLE_ORDER_EXECUTION: "false"
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on: [temporal]
   web:
     build: ./web
+    environment:
+      TRADING_API_URL: http://api:8000
     ports: ["3107:3000"]
     depends_on: [api]
 volumes:
