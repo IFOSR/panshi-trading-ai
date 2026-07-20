@@ -1,0 +1,42 @@
+[project]
+name = "china-futures-trading-agent"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "numpy>=1.23",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.8",
+  "python-multipart>=0.0.20",
+  "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.15",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.25",
+  "ruff>=0.11",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["trading_agent"]
+
