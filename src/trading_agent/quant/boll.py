@@ -9,6 +9,7 @@ class BollResult:
     lower: float
     period: int
     deviations: float
+    formula_version: str = "boll-population-std-v1"
 
 
 def boll(
@@ -31,4 +32,3 @@ def boll(
         period=period,
         deviations=deviations,
     )
-

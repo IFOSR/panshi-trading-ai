@@ -1,11 +1,13 @@
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Callable
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from trading_agent.domain.enums import EvidenceUsage
 from trading_agent.domain.evidence import Evidence, ScreenshotEvidence
@@ -18,7 +20,10 @@ from trading_agent.vision.image_quality import inspect_original_image
 from trading_agent.vision.prompts import CHART_EVIDENCE_PROMPT
 
 
-Runner = Callable[[list[str], float], CompletedProcess[str]]
+Runner = Callable[
+    [list[str], float, Path, str, dict[str, str]],
+    CompletedProcess[str],
+]
 
 
 class StrictExtractionModel(BaseModel):
@@ -27,30 +32,30 @@ class StrictExtractionModel(BaseModel):
 
 class BollExtraction(StrictExtractionModel):
     period: int | None
-    mid: float | None
-    upper: float | None
-    lower: float | None
+    mid: float | None = Field(allow_inf_nan=False)
+    upper: float | None = Field(allow_inf_nan=False)
+    lower: float | None = Field(allow_inf_nan=False)
 
 
 class MacdExtraction(StrictExtractionModel):
     fast: int | None
     slow: int | None
     signal: int | None
-    dif: float | None
-    dea: float | None
-    histogram: float | None
+    dif: float | None = Field(allow_inf_nan=False)
+    dea: float | None = Field(allow_inf_nan=False)
+    histogram: float | None = Field(allow_inf_nan=False)
 
 
 class VolumeExtraction(StrictExtractionModel):
-    current: float | None
-    ma_short: float | None
-    ma_long: float | None
+    current: float | None = Field(allow_inf_nan=False)
+    ma_short: float | None = Field(allow_inf_nan=False)
+    ma_long: float | None = Field(allow_inf_nan=False)
 
 
 class PositionBehaviorExtraction(StrictExtractionModel):
-    label: str | None
-    value: float | None
-    interpretation: str | None
+    label: str | None = Field(max_length=80)
+    value: float | None = Field(allow_inf_nan=False)
+    interpretation: str | None = Field(max_length=500)
 
 
 class IndicatorExtraction(StrictExtractionModel):
@@ -62,46 +67,62 @@ class IndicatorExtraction(StrictExtractionModel):
 
 
 class ObservationExtraction(StrictExtractionModel):
-    evidence_id: str
-    kind: str
-    conclusion: str
+    evidence_id: str = Field(min_length=1, max_length=100)
+    kind: str = Field(min_length=1, max_length=100)
+    conclusion: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0.0, le=1.0)
-    visible_text: str | None
-    evidence_description: str
+    visible_text: str | None = Field(max_length=500)
+    evidence_description: str = Field(min_length=1, max_length=1000)
+    source_image_index: int = Field(ge=0)
 
 
 class ScreenshotExtraction(StrictExtractionModel):
-    image_role: str
-    instrument: str | None
-    contract: str | None
-    timeframe: str | None
-    cutoff_time: str | None
+    image_role: str = Field(pattern="^(STATE_DAILY|EXECUTION_60M|MEMBER_POSITION|CONTRACT_ROLLOVER|ACCOUNT_POSITION|AUXILIARY)$")
+    instrument: str | None = Field(max_length=80)
+    contract: str | None = Field(max_length=40)
+    timeframe: str | None = Field(pattern="^(1d|D1|60m|1h|H1)$")
+    cutoff_time: str | None = Field(max_length=40)
     last_bar_closed: bool | None
     indicators: IndicatorExtraction
     observations: list[ObservationExtraction]
     blocking_issues: list[str]
     allowed_usage: EvidenceUsage
 
+    @field_validator("cutoff_time")
+    @classmethod
+    def validate_cutoff_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from datetime import datetime
+
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("cutoff_time must include timezone")
+        return value
+
 
 def enforce_safe_usage(extraction: ScreenshotExtraction) -> EvidenceUsage:
-    critical_fields_present = (
-        extraction.contract is not None
-        and extraction.timeframe is not None
-        and extraction.cutoff_time is not None
-        and extraction.last_bar_closed is True
-    )
-    if extraction.allowed_usage == EvidenceUsage.EXACT and not critical_fields_present:
+    if extraction.allowed_usage == EvidenceUsage.EXACT:
         return EvidenceUsage.QUALITATIVE_ONLY
     return extraction.allowed_usage
 
 
-def _run(command: list[str], timeout: float) -> CompletedProcess[str]:
+def _run(
+    command: list[str],
+    timeout: float,
+    cwd: Path,
+    stdin: str,
+    env: dict[str, str],
+) -> CompletedProcess[str]:
     return subprocess.run(
         command,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
+        cwd=cwd,
+        input=stdin,
+        env=env,
     )
 
 
@@ -127,8 +148,12 @@ class CodexVisionProvider:
             "exec",
             "--skip-git-repo-check",
             "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
             "--sandbox",
             "read-only",
+            "-C",
+            str(schema_path.parent),
             "--model",
             self.model,
         ]
@@ -140,28 +165,56 @@ class CodexVisionProvider:
                 str(schema_path),
                 "--output-last-message",
                 str(output_path),
-                CHART_EVIDENCE_PROMPT
-                + (
-                    f"\n用户上下文：{request.user_context}"
-                    if request.user_context
-                    else ""
-                ),
+                "-",
             ]
         )
         return command
 
     def analyze(self, request: VisionRequest) -> ScreenshotEvidence:
-        artifacts = [inspect_original_image(path) for path in request.image_paths]
+        if not request.privacy_assessment.safe_for_model:
+            raise ValueError("privacy assessment blocks model transmission")
+        artifacts = [
+            inspect_original_image(path, storage_root=request.storage_root)
+            for path in request.image_paths
+        ]
         with tempfile.TemporaryDirectory(prefix="trading-agent-codex-") as temp_dir:
-            schema_path = Path(temp_dir) / "schema.json"
-            output_path = Path(temp_dir) / "output.json"
+            isolated_root = Path(temp_dir)
+            isolated_paths: list[Path] = []
+            for index, artifact in enumerate(artifacts):
+                isolated_path = isolated_root / f"image-{index}{artifact.path.suffix.lower()}"
+                shutil.copyfile(artifact.path, isolated_path)
+                isolated_paths.append(isolated_path)
+
+            schema_path = isolated_root / "schema.json"
+            output_path = isolated_root / "output.json"
             schema_path.write_text(
                 json.dumps(ScreenshotExtraction.model_json_schema(), ensure_ascii=False),
                 encoding="utf-8",
             )
-            command = self.build_command(request, schema_path, output_path)
+            isolated_request = request.model_copy(
+                update={
+                    "image_paths": isolated_paths,
+                    "storage_root": isolated_root,
+                }
+            )
+            command = self.build_command(isolated_request, schema_path, output_path)
+            user_context = (request.user_context or "").replace("\x00", "")[:2000]
+            prompt = CHART_EVIDENCE_PROMPT
+            if user_context:
+                prompt += f"\n用户上下文：{user_context}"
+            environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key in {"PATH", "HOME", "CODEX_HOME", "LANG", "LC_ALL", "TMPDIR"}
+            }
             try:
-                completed = self.runner(command, self.timeout_seconds)
+                completed = self.runner(
+                    command,
+                    self.timeout_seconds,
+                    isolated_root,
+                    prompt,
+                    environment,
+                )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise ProviderUnavailable(f"codex image provider unavailable: {exc}") from exc
 
@@ -188,9 +241,10 @@ class CodexVisionProvider:
                 confidence=observation.confidence,
                 provenance=f"codex:{self.model}",
                 visible_text=observation.visible_text,
-                image_path=str(request.image_paths[0]),
+                image_path=str(artifacts[observation.source_image_index].path),
             )
             for observation in extraction.observations
+            if observation.source_image_index < len(artifacts)
         ]
         return ScreenshotEvidence(
             image_role=extraction.image_role,

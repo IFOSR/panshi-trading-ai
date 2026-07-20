@@ -4,6 +4,7 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from trading_agent.domain.evidence import ScreenshotEvidence
+from trading_agent.vision.privacy import PrivacyAssessment
 
 
 class ProviderUnavailable(RuntimeError):
@@ -17,10 +18,11 @@ class ProviderResponseError(RuntimeError):
 class VisionRequest(BaseModel):
     prompt_version: str
     image_paths: list[Path] = Field(min_length=1)
+    storage_root: Path
+    privacy_assessment: PrivacyAssessment
     user_context: str | None = None
 
 
 class VisionProvider(Protocol):
     def analyze(self, request: VisionRequest) -> ScreenshotEvidence:
         ...
-
