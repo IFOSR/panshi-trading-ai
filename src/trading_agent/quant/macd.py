@@ -9,6 +9,7 @@ class MacdResult:
     fast: int
     slow: int
     signal: int
+    formula_version: str = "macd-ema-seed-first-v1"
 
 
 def _ema(values: list[float], span: int) -> list[float]:
@@ -45,4 +46,3 @@ def macd(
         slow=slow,
         signal=signal,
     )
-

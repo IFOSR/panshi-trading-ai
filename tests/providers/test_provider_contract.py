@@ -10,9 +10,22 @@ from trading_agent.providers.codex import CodexVisionProvider
 from trading_agent.providers.codex import ScreenshotExtraction
 from trading_agent.providers.fallback import FallbackVisionProvider
 from trading_agent.providers.kimi import KimiVisionProvider
+from trading_agent.vision.privacy import PrivacyAssessment
 
 
 FIXTURE = Path("tests/fixtures/charts/daily_boll_macd_volume.png")
+
+
+def make_request() -> VisionRequest:
+    return VisionRequest(
+        prompt_version="chart-evidence-v1",
+        image_paths=[FIXTURE],
+        storage_root=FIXTURE.parent,
+        privacy_assessment=PrivacyAssessment(
+            contains_account_identifiers=False,
+            safe_for_model=True,
+        ),
+    )
 
 
 def test_vision_request_requires_at_least_one_original_image() -> None:
@@ -22,10 +35,7 @@ def test_vision_request_requires_at_least_one_original_image() -> None:
 
 def test_codex_command_attaches_original_image_and_schema(tmp_path: Path) -> None:
     provider = CodexVisionProvider(model="gpt-5.6-sol")
-    request = VisionRequest(
-        prompt_version="chart-evidence-v1",
-        image_paths=[FIXTURE],
-    )
+    request = make_request()
 
     command = provider.build_command(
         request=request,
@@ -82,14 +92,20 @@ def test_codex_parses_strict_json_and_adds_provenance() -> None:
         "allowed_usage": "QUALITATIVE_ONLY",
     }
 
-    def runner(command: list[str], timeout: float) -> CompletedProcess[str]:
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text(json.dumps(payload), encoding="utf-8")
         return CompletedProcess(command, 0, stdout="", stderr="")
 
     provider = CodexVisionProvider(model="gpt-5.6-sol", runner=runner)
     evidence = provider.analyze(
-        VisionRequest(prompt_version="chart-evidence-v1", image_paths=[FIXTURE])
+        make_request()
     )
 
     assert evidence.timeframe == "1d"
@@ -104,7 +120,7 @@ def test_codex_downgrades_exact_usage_when_critical_fields_are_missing() -> None
         "instrument": None,
         "contract": None,
         "timeframe": "1d",
-        "cutoff_time": "2026/07/20",
+        "cutoff_time": "2026-07-20T15:00:00+08:00",
         "last_bar_closed": None,
         "indicators": {
             "boll": None,
@@ -118,13 +134,19 @@ def test_codex_downgrades_exact_usage_when_critical_fields_are_missing() -> None
         "allowed_usage": "EXACT",
     }
 
-    def runner(command: list[str], timeout: float) -> CompletedProcess[str]:
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text(json.dumps(payload), encoding="utf-8")
         return CompletedProcess(command, 0, stdout="", stderr="")
 
     evidence = CodexVisionProvider(runner=runner).analyze(
-        VisionRequest(prompt_version="chart-evidence-v1", image_paths=[FIXTURE])
+        make_request()
     )
 
     assert evidence.allowed_usage.value == "QUALITATIVE_ONLY"
@@ -142,12 +164,18 @@ def test_fallback_uses_kimi_only_when_codex_is_unavailable() -> None:
     provider = FallbackVisionProvider(primary=Primary(), fallback=Fallback())
 
     assert provider.analyze(
-        VisionRequest(prompt_version="chart-evidence-v1", image_paths=[FIXTURE])
+        make_request()
     ) == "kimi-result"
 
 
 def test_kimi_rejects_text_only_model_response() -> None:
-    def runner(command: list[str], timeout: float) -> CompletedProcess[str]:
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
         return CompletedProcess(
             command,
             0,
@@ -155,9 +183,149 @@ def test_kimi_rejects_text_only_model_response() -> None:
             stderr="",
         )
 
-    provider = KimiVisionProvider(runner=runner)
+    provider = KimiVisionProvider(runner=runner, capability_checker=lambda: True)
 
     with pytest.raises(ProviderUnavailable, match="image"):
         provider.analyze(
-            VisionRequest(prompt_version="chart-evidence-v1", image_paths=[FIXTURE])
+            make_request()
         )
+
+
+def test_codex_runs_in_isolated_directory_with_rules_disabled() -> None:
+    captured: dict[str, object] = {}
+    payload = {
+        "image_role": "STATE_DAILY",
+        "instrument": None,
+        "contract": None,
+        "timeframe": "D1",
+        "cutoff_time": None,
+        "last_bar_closed": None,
+        "indicators": {
+            "boll": None,
+            "macd": None,
+            "volume": None,
+            "position_behavior": None,
+            "notes": [],
+        },
+        "observations": [],
+        "blocking_issues": ["CONTRACT_MISSING"],
+        "allowed_usage": "QUALITATIVE_ONLY",
+    }
+
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
+        captured.update(command=command, cwd=cwd, stdin=stdin, env=env)
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(payload), encoding="utf-8")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    CodexVisionProvider(runner=runner).analyze(make_request())
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "--ignore-user-config" in command
+    assert "--ignore-rules" in command
+    assert captured["cwd"] != Path.cwd()
+    assert command[-1] == "-"
+    assert "中国期货交易截图证据抽取器" in str(captured["stdin"])
+
+
+def test_unsafe_privacy_assessment_blocks_provider_before_runner() -> None:
+    called = False
+
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    request = VisionRequest(
+        prompt_version="chart-evidence-v1",
+        image_paths=[FIXTURE],
+        storage_root=FIXTURE.parent,
+        privacy_assessment=PrivacyAssessment(
+            contains_account_identifiers=True,
+            sensitive_fields=["account_id"],
+            safe_for_model=False,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="privacy"):
+        CodexVisionProvider(runner=runner).analyze(request)
+
+    assert called is False
+
+
+def test_kimi_without_verified_image_capability_is_unavailable() -> None:
+    provider = KimiVisionProvider(capability_checker=lambda: False)
+
+    with pytest.raises(ProviderUnavailable, match="image capability"):
+        provider.analyze(make_request())
+
+
+def test_model_output_cannot_grant_exact_usage() -> None:
+    payload = {
+        "image_role": "STATE_DAILY",
+        "instrument": "螺纹钢",
+        "contract": "rb2610",
+        "timeframe": "1d",
+        "cutoff_time": "2026-07-20T15:00:00+08:00",
+        "last_bar_closed": True,
+        "indicators": {
+            "boll": None,
+            "macd": None,
+            "volume": None,
+            "position_behavior": None,
+            "notes": [],
+        },
+        "observations": [],
+        "blocking_issues": [],
+        "allowed_usage": "EXACT",
+    }
+
+    extraction = ScreenshotExtraction.model_validate(payload)
+
+    from trading_agent.providers.codex import enforce_safe_usage
+
+    assert enforce_safe_usage(extraction).value == "QUALITATIVE_ONLY"
+
+
+def test_observation_requires_valid_source_image_index() -> None:
+    payload = {
+        "evidence_id": "ev-1",
+        "kind": "PRICE_BELOW_BOLL_MID",
+        "conclusion": "true",
+        "confidence": 0.9,
+        "visible_text": None,
+        "evidence_description": "价格位于中轨下方",
+        "source_image_index": -1,
+    }
+
+    from trading_agent.providers.codex import ObservationExtraction
+
+    with pytest.raises(ValidationError):
+        ObservationExtraction.model_validate(payload)
+
+
+def test_extraction_rejects_non_finite_indicator_values() -> None:
+    payload = {
+        "period": 20,
+        "mid": float("nan"),
+        "upper": 18000.0,
+        "lower": 16000.0,
+    }
+
+    from trading_agent.providers.codex import BollExtraction
+
+    with pytest.raises(ValidationError):
+        BollExtraction.model_validate(payload)
