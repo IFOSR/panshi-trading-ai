@@ -11,7 +11,14 @@ def test_compose_connects_api_to_postgres() -> None:
 def test_compose_runs_long_lived_temporal_worker() -> None:
     assert "python -m trading_agent.workflows.worker" in COMPOSE
     assert "TEMPORAL_ADDRESS: temporal:7233" in COMPOSE
+    assert "condition: service_healthy" in COMPOSE
+    assert "restart: unless-stopped" in COMPOSE
 
 
 def test_compose_connects_web_to_api() -> None:
     assert "TRADING_API_URL: http://api:8000" in COMPOSE
+
+
+def test_compose_runs_migrations_and_shares_original_images() -> None:
+    assert "alembic upgrade head && uvicorn" in COMPOSE
+    assert "image-data:/app/data/images" in COMPOSE

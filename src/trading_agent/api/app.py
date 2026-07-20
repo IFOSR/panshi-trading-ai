@@ -1,10 +1,13 @@
 from hashlib import sha256
 import os
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
+from temporalio.client import Client
+from temporalio.common import WorkflowIDConflictPolicy
 
 from trading_agent.db.base import Base, build_engine, session_factory
 from trading_agent.db.repositories import CaseRepository
@@ -15,7 +18,12 @@ from trading_agent.providers.fallback import FallbackVisionProvider
 from trading_agent.providers.kimi import KimiVisionProvider
 from trading_agent.strategy.context import StrategyContext
 from trading_agent.vision.privacy import PrivacyAssessment
+from trading_agent.workflows.activities import AnalysisCommand
 from trading_agent.workflows.analysis import AnalysisWorkflow
+from trading_agent.workflows.worker import DurableAnalysisWorkflow, TASK_QUEUE
+
+
+TemporalExecutor = Callable[[AnalysisCommand], Awaitable[dict[str, object]]]
 
 
 class CreateCaseRequest(BaseModel):
@@ -34,6 +42,7 @@ def create_app(
     database_url: str | None = None,
     storage_root: Path | None = None,
     vision_provider: VisionProvider | None = None,
+    temporal_executor: TemporalExecutor | None = None,
 ) -> FastAPI:
     database_url = (
         database_url
@@ -50,6 +59,21 @@ def create_app(
         primary=CodexVisionProvider(),
         fallback=KimiVisionProvider(),
     )
+    temporal_address = os.getenv("TEMPORAL_ADDRESS")
+    if temporal_executor is None and temporal_address:
+        async def configured_temporal_executor(
+            command: AnalysisCommand,
+        ) -> dict[str, object]:
+            client = await Client.connect(temporal_address)
+            return await client.execute_workflow(
+                DurableAnalysisWorkflow.run,
+                command.model_dump(mode="json"),
+                id=f"analysis-{command.case_id}-{command.idempotency_key}",
+                task_queue=TASK_QUEUE,
+                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            )
+
+        temporal_executor = configured_temporal_executor
     app = FastAPI(title="China Futures Trading Agent")
     app.state.database_url = database_url
 
@@ -128,11 +152,29 @@ def create_app(
                 return result
 
     @app.post("/v1/cases/{case_id}/analysis")
-    def analyze(
+    async def analyze(
         case_id: str,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> dict:
         key = require_key(idempotency_key)
+        if temporal_executor is not None:
+            with sessions() as session:
+                repo = CaseRepository(session)
+                cached = repo.idempotent_result(case_id, "analysis", key)
+                if cached:
+                    return cached
+                state = repo.get_case(case_id)
+                if state is None:
+                    raise HTTPException(404, "case not found")
+                if not state.get("images"):
+                    raise HTTPException(400, "analysis requires at least one image")
+            return await temporal_executor(
+                AnalysisCommand(
+                    case_id=case_id,
+                    idempotency_key=key,
+                    storage_root=str(image_root.resolve()),
+                )
+            )
         with sessions() as session:
             with session.begin():
                 repo = CaseRepository(session)

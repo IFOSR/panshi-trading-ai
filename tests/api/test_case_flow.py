@@ -100,3 +100,46 @@ def test_default_app_reads_database_url_from_environment(monkeypatch, tmp_path) 
     app = create_app()
 
     assert app.state.database_url == database_url
+
+
+def test_temporal_executor_owns_analysis_when_configured(tmp_path) -> None:
+    called = False
+
+    class ProviderMustNotRun:
+        def analyze(self, request):
+            raise AssertionError("API must not run provider when Temporal is configured")
+
+    async def temporal_executor(command):
+        nonlocal called
+        called = True
+        return {
+            "analysis_id": "temporal-analysis",
+            "milestones": [{"number": number} for number in range(1, 9)],
+            "decision": {"action": "WAIT_FOR_DATA"},
+            "rendered": {"summary": "等待补齐数据"},
+            "evidence": {"provider": "codex"},
+        }
+
+    client = TestClient(
+        create_app(
+            database_url="sqlite+pysqlite:///:memory:",
+            storage_root=tmp_path,
+            vision_provider=ProviderMustNotRun(),
+            temporal_executor=temporal_executor,
+        )
+    )
+    case_id = client.post("/v1/cases", json={}).json()["case_id"]
+    client.post(
+        f"/v1/cases/{case_id}/images",
+        headers={"Idempotency-Key": "image"},
+        files={"file": ("chart.png", b"\x89PNG\r\n\x1a\nfixture", "image/png")},
+    ).raise_for_status()
+
+    response = client.post(
+        f"/v1/cases/{case_id}/analysis",
+        headers={"Idempotency-Key": "analysis"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["analysis_id"] == "temporal-analysis"
+    assert called is True

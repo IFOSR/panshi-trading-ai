@@ -36,6 +36,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
   temporal-ui:
     image: temporalio/ui:2.34.0
     environment:
@@ -47,21 +52,31 @@ services:
     volumes: ["./infra/otel-collector.yaml:/etc/otel.yaml:ro"]
   api:
     build: .
-    command: uvicorn trading_agent.api.app:app --host 0.0.0.0 --port 8000
+    command: sh -c "alembic upgrade head && uvicorn trading_agent.api.app:app --host 0.0.0.0 --port 8000"
     environment:
       TRADING_AGENT_ENABLE_ORDER_EXECUTION: "false"
       TRADING_AGENT_DATABASE_URL: postgresql+psycopg://trading:trading-local-only@postgres:5432/trading_agent
+      TEMPORAL_ADDRESS: temporal:7233
     ports: ["8000:8000"]
     depends_on:
       postgres:
         condition: service_healthy
+      temporal:
+        condition: service_healthy
+    volumes: [image-data:/app/data/images]
   worker:
     build: .
     command: python -m trading_agent.workflows.worker
     environment:
       TRADING_AGENT_ENABLE_ORDER_EXECUTION: "false"
+      TRADING_AGENT_DATABASE_URL: postgresql+psycopg://trading:trading-local-only@postgres:5432/trading_agent
       TEMPORAL_ADDRESS: temporal:7233
-    depends_on: [temporal]
+      CODE_CLI_API_KEY: ${CODE_CLI_API_KEY}
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes: [image-data:/app/data/images]
   web:
     build: ./web
     environment:
@@ -71,3 +86,4 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  image-data:
