@@ -316,6 +316,8 @@ def test_runtime_dependency_check_does_not_import_heavy_market_modules(
     assert available is True
     script = captured[0][2]
     assert "importlib.util.find_spec" in script
+    assert '"panshi-user"' in script
+    assert "console_scripts" in script
     assert "import akshare" not in script
     assert "import tqsdk" not in script
 
