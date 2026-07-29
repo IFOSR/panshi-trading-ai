@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from trading_agent.auth.repository import AuthRepository
@@ -29,6 +30,17 @@ def test_set_password_creates_normalized_user_and_replaces_hash() -> None:
     assert len(users) == 1
     assert users[0].password_hash == "hash-two"
     assert users[0].is_active is True
+
+
+def test_set_password_rejects_empty_or_oversized_normalized_username() -> None:
+    sessions = make_sessions()
+    with sessions() as session:
+        with session.begin():
+            repo = AuthRepository(session)
+            with pytest.raises(ValueError, match="username"):
+                repo.set_password("   ", "hash")
+            with pytest.raises(ValueError, match="username"):
+                repo.set_password("x" * 101, "hash")
 
 
 def test_password_replacement_and_disable_revoke_existing_sessions() -> None:
@@ -130,4 +142,3 @@ def test_raw_session_token_is_never_persisted() -> None:
     assert record is not None
     assert record.token_hash == token_hash
     assert raw_token not in record.token_hash
-

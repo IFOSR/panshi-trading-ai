@@ -10,7 +10,10 @@ from trading_agent.db.models import AuthSessionRecord, UserRecord
 
 
 def normalize_username(username: str) -> str:
-    return username.strip().lower()
+    normalized = username.strip().lower()
+    if not normalized or len(normalized) > 100:
+        raise ValueError("username must contain 1 to 100 characters")
+    return normalized
 
 
 class AuthRepository:

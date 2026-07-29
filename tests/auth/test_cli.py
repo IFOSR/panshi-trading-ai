@@ -84,6 +84,21 @@ def test_set_password_rejects_empty_mismatched_and_extra_stdin(tmp_path) -> None
     assert empty == extra == mismatch == 1
 
 
+def test_set_password_rejects_blank_username(tmp_path) -> None:
+    database_url = migrated_database_url(tmp_path)
+    stderr = StringIO()
+
+    result = main(
+        ["set-password", "   ", "--password-stdin"],
+        environ={"TRADING_AGENT_DATABASE_URL": database_url},
+        stdin=StringIO("secret\n"),
+        stderr=stderr,
+    )
+
+    assert result == 1
+    assert "username" in stderr.getvalue()
+
+
 def test_enable_and_disable_update_existing_user(tmp_path) -> None:
     database_url = migrated_database_url(tmp_path)
     environment = {"TRADING_AGENT_DATABASE_URL": database_url}
