@@ -721,7 +721,7 @@ def test_readiness_requires_an_expected_status() -> None:
         thread.join()
 
 
-def test_local_start_requires_an_unauthenticated_web_response(
+def test_local_start_uses_the_public_login_page_for_readiness(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -782,6 +782,6 @@ def test_local_start_requires_an_unauthenticated_web_response(
     _start_runtime_unlocked(paths)
 
     assert readiness_checks[-1] == (
-        "http://127.0.0.1:8989/cases/demo",
+        "http://127.0.0.1:8989/login",
         {200},
     )
