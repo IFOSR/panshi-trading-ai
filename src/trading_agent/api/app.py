@@ -21,6 +21,7 @@ from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
 
 from trading_agent.config import Settings
+from trading_agent.auth.service import AuthService, InvalidCredentials, InvalidSession
 from trading_agent.conversation.models import ConversationReply
 from trading_agent.conversation.service import ConversationService
 from trading_agent.db.base import Base, build_engine, session_factory
@@ -374,6 +375,11 @@ class StrategySelectionRequest(BaseModel):
     version: str | None = None
 
 
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=1000)
+
+
 LEGACY_STRATEGY_SUMMARY = {
     "strategy_id": "structure_confirmation",
     "version": "1.0.0",
@@ -512,6 +518,43 @@ def create_app(
             **state,
             "strategy": dict(LEGACY_STRATEGY_SUMMARY),
         }
+
+    @app.post("/v1/auth/login")
+    def login(request: LoginRequest) -> dict:
+        with sessions() as session:
+            with session.begin():
+                try:
+                    return AuthService(session).login(
+                        request.username,
+                        request.password,
+                    )
+                except InvalidCredentials as exc:
+                    raise HTTPException(
+                        401,
+                        "invalid username or password",
+                    ) from exc
+
+    @app.get("/v1/auth/session")
+    def validate_auth_session(
+        x_panshi_session: str | None = Header(default=None),
+    ) -> dict:
+        with sessions() as session:
+            with session.begin():
+                try:
+                    return AuthService(session).validate_session(
+                        x_panshi_session
+                    )
+                except InvalidSession as exc:
+                    raise HTTPException(401, "invalid session") from exc
+
+    @app.post("/v1/auth/logout")
+    def logout(
+        x_panshi_session: str | None = Header(default=None),
+    ) -> dict[str, bool]:
+        with sessions() as session:
+            with session.begin():
+                AuthService(session).logout(x_panshi_session)
+        return {"ok": True}
 
     @app.get("/v1/strategies")
     def list_strategies() -> list[dict]:
