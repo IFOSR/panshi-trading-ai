@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 
 def test_sqlite_upgrade_from_0001_backfills_analysis_sequence(tmp_path) -> None:
@@ -73,3 +73,29 @@ def test_sqlite_upgrade_from_0001_backfills_analysis_sequence(tmp_path) -> None:
             )
         ).scalar_one()
     assert sequence == 1
+
+
+def test_authentication_migration_creates_users_and_sessions(tmp_path) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'auth.db'}"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", database_url)
+
+    command.upgrade(config, "head")
+
+    inspector = inspect(create_engine(database_url))
+    assert {"users", "auth_sessions"}.issubset(inspector.get_table_names())
+    assert {
+        "user_id",
+        "username",
+        "password_hash",
+        "is_active",
+        "created_at",
+        "updated_at",
+    } == {column["name"] for column in inspector.get_columns("users")}
+    assert {
+        "session_id",
+        "user_id",
+        "token_hash",
+        "created_at",
+        "expires_at",
+    } == {column["name"] for column in inspector.get_columns("auth_sessions")}
