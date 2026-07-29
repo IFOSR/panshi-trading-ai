@@ -461,6 +461,7 @@ constraints = {{
     "akshare": ("1.18.75", "2"),
     "tqsdk": ("3.10.1", "4"),
 }}
+required_commands = {{"panshi-user", "trading-agent-local"}}
 
 def version_tuple(value):
     parts = [int(part) for part in re.findall(r"\\d+", value)[:3]]
@@ -472,6 +473,15 @@ missing = [
 ]
 if missing:
     print("missing runtime modules: " + ", ".join(missing))
+    sys.exit(1)
+
+commands = {{
+    entry.name
+    for entry in importlib.metadata.entry_points(group="console_scripts")
+}}
+missing_commands = sorted(required_commands - commands)
+if missing_commands:
+    print("missing runtime commands: " + ", ".join(missing_commands))
     sys.exit(1)
 
 incompatible = []
