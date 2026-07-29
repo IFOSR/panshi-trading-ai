@@ -18,6 +18,23 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:3107"
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"] } }
+    {
+      name: "setup",
+      testMatch: /auth\.setup\.ts/
+    },
+    {
+      name: "auth",
+      testMatch: /auth\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"] }
+    },
+    {
+      name: "desktop",
+      dependencies: ["setup"],
+      testIgnore: [/auth\.setup\.ts/, /auth\.spec\.ts/],
+      use: {
+        ...devices["Desktop Chrome"],
+        storageState: "tmp/playwright-auth.json"
+      }
+    }
   ]
 });
