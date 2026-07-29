@@ -447,6 +447,7 @@ def _python_runtime_available(paths: LocalPaths) -> tuple[bool, str]:
         "sqlalchemy",
         "temporalio",
         "tqsdk",
+        "trading_agent.auth.cli",
         "uvicorn",
     )
     script = f"""

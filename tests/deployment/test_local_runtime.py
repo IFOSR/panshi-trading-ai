@@ -288,6 +288,11 @@ def test_local_runtime_declares_free_market_data_dependencies() -> None:
     assert '"tqsdk>=3.10.1,<4"' in PYPROJECT
 
 
+def test_local_runtime_installs_sqlite_user_administration_cli() -> None:
+    assert 'panshi-user = "trading_agent.auth.cli:entrypoint"' in PYPROJECT
+    assert "TRADING_AGENT_USER_PASSWORD" not in LOCAL_ENV_EXAMPLE
+
+
 def test_runtime_dependency_check_does_not_import_heavy_market_modules(
     monkeypatch,
     tmp_path: Path,
