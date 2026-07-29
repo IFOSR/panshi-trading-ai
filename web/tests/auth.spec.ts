@@ -88,3 +88,27 @@ test("logout revokes the session and returns to login", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/login\?next=%2F$/);
 });
+
+test("keeps the session when database logout cannot be confirmed", async ({
+  page,
+  context
+}) => {
+  await page.goto("/login");
+  await page.getByLabel("用户名").fill("outage");
+  await page.getByLabel("密码").fill("test-password");
+  await page.getByRole("button", { name: "登录" }).click();
+  await expect(page).toHaveURL("/", { timeout: 20_000 });
+  await expect(page.getByTestId("current-user")).toContainText("outage");
+
+  const logout = page.getByRole("button", { name: "退出登录" });
+  await logout.focus();
+  await logout.press("Enter");
+
+  await expect(page).toHaveURL("/");
+  await expect(
+    page.locator(".sidebar-account").getByRole("alert")
+  ).toContainText("退出失败");
+  expect(
+    (await context.cookies()).some((item) => item.name === "panshi_session")
+  ).toBe(true);
+});

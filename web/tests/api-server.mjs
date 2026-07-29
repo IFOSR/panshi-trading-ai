@@ -199,7 +199,7 @@ let deletedCaseIds = new Set();
 let historyCleared = false;
 let deleteFailure = false;
 let extraHistoryCount = 0;
-const authSessions = new Set();
+const authSessions = new Map();
 let authSessionSequence = 0;
 
 const previousAnalysis = {
@@ -701,17 +701,19 @@ http.createServer(async (request, response) => {
   if (request.method === "POST" && request.url === "/v1/auth/login") {
     const payload = JSON.parse((await consume(request)).toString("utf8"));
     if (
-      payload.username !== "ylfego"
+      !["ylfego", "outage"].includes(payload.username)
       || payload.password !== "test-password"
     ) {
       sendJson(response, { detail: "invalid username or password" }, 401);
       return;
     }
     authSessionSequence += 1;
-    const token = `test-session-${authSessionSequence}`;
-    authSessions.add(token);
+    const token = payload.username === "outage"
+      ? `outage-session-${authSessionSequence}`
+      : `test-session-${authSessionSequence}`;
+    authSessions.set(token, payload.username);
     sendJson(response, {
-      username: "ylfego",
+      username: payload.username,
       session_token: token,
       expires_at: "2026-07-30T00:00:00Z"
     });
@@ -724,13 +726,17 @@ http.createServer(async (request, response) => {
       return;
     }
     sendJson(response, {
-      username: "ylfego",
+      username: authSessions.get(token),
       expires_at: "2026-07-30T00:00:00Z"
     });
     return;
   }
   if (request.method === "POST" && request.url === "/v1/auth/logout") {
     const token = request.headers["x-panshi-session"];
+    if (typeof token === "string" && token.startsWith("outage-session-")) {
+      sendJson(response, { detail: "authentication service unavailable" }, 503);
+      return;
+    }
     if (typeof token === "string") authSessions.delete(token);
     sendJson(response, { ok: true });
     return;

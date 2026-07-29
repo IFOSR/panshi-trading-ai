@@ -15,9 +15,15 @@ export async function POST(request: Request): Promise<Response> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   const configuration = authConfiguration();
-  if (token && configuration) {
+  if (token) {
+    if (!configuration) {
+      return Response.json(
+        { detail: "authentication service unavailable" },
+        { status: 503 }
+      );
+    }
     try {
-      await fetch(`${configuration.baseUrl}/v1/auth/logout`, {
+      const upstream = await fetch(`${configuration.baseUrl}/v1/auth/logout`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${configuration.apiToken}`,
@@ -25,8 +31,17 @@ export async function POST(request: Request): Promise<Response> {
         },
         cache: "no-store"
       });
+      if (!upstream.ok) {
+        return Response.json(
+          { detail: "authentication service unavailable" },
+          { status: 503 }
+        );
+      }
     } catch {
-      // Clearing the browser cookie keeps logout idempotent during outages.
+      return Response.json(
+        { detail: "authentication service unavailable" },
+        { status: 503 }
+      );
     }
   }
   const response = NextResponse.json({ ok: true });
