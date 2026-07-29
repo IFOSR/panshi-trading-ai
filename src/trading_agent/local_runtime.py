@@ -838,7 +838,7 @@ def _start_runtime_unlocked(paths: LocalPaths) -> None:
                 f"API failed to become ready; see {paths.log_file('api')}"
             )
         if not _wait_for_url(
-            f"http://{WEB_HOST}:{WEB_PORT}/cases/demo",
+            f"http://{WEB_HOST}:{WEB_PORT}/login",
             expected_statuses={200},
         ):
             raise RuntimeError(

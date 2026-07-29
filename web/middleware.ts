@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export function middleware(request: NextRequest): NextResponse {
+import {
+  SESSION_COOKIE,
+  validateSessionToken
+} from "./lib/auth";
+
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/session"
+]);
+
+export async function middleware(request: NextRequest): Promise<NextResponse> {
   const suppliedHost = request.headers.get("host");
   let headerHostname = "";
   try {
@@ -20,7 +32,48 @@ export function middleware(request: NextRequest): NextResponse {
       headers: { "Cache-Control": "no-store" }
     });
   }
-  return NextResponse.next();
+  if (PUBLIC_PATHS.has(request.nextUrl.pathname)) {
+    return NextResponse.next();
+  }
+  const apiRequest = request.nextUrl.pathname.startsWith("/api/");
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token) {
+    if (apiRequest) {
+      return NextResponse.json(
+        { detail: "authentication required" },
+        { status: 401 }
+      );
+    }
+    const login = new URL("/login", request.url);
+    login.searchParams.set(
+      "next",
+      `${request.nextUrl.pathname}${request.nextUrl.search}`
+    );
+    return NextResponse.redirect(login);
+  }
+  const session = await validateSessionToken(token);
+  if (session.status === "valid") return NextResponse.next();
+  if (apiRequest) {
+    return NextResponse.json(
+      {
+        detail: session.status === "unavailable"
+          ? "authentication service unavailable"
+          : "authentication required"
+      },
+      { status: session.status === "unavailable" ? 503 : 401 }
+    );
+  }
+  const login = new URL("/login", request.url);
+  login.searchParams.set(
+    "next",
+    `${request.nextUrl.pathname}${request.nextUrl.search}`
+  );
+  if (session.status === "unavailable") {
+    login.searchParams.set("service", "unavailable");
+  }
+  const response = NextResponse.redirect(login);
+  if (session.status === "invalid") response.cookies.delete(SESSION_COOKIE);
+  return response;
 }
 
 export const config = {

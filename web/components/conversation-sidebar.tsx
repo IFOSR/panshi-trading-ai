@@ -28,6 +28,7 @@ export function ConversationSidebar({
   const [pending, setPending] = useState<PendingDeletion | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const fallbackFocusRef = useRef<HTMLElement | null>(null);
@@ -36,6 +37,28 @@ export function ConversationSidebar({
   useEffect(() => {
     setItems(conversations);
   }, [conversations]);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/auth/session", { cache: "no-store" })
+      .then(async (response) => (
+        response.ok
+          ? await response.json() as { username: string }
+          : null
+      ))
+      .then((session) => {
+        if (active) setUsername(session?.username ?? null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.replace("/login");
+    router.refresh();
+  }
 
   useEffect(() => {
     if (sessionStorage.getItem(FOCUS_NEW_CHAT_KEY) !== "true") return;
@@ -212,7 +235,14 @@ export function ConversationSidebar({
           <p className="conversation-list__error" role="alert">{error}</p>
         ) : null}
       </div>
-      <footer>本地轻量模式 · 端口 8989</footer>
+      <footer className="sidebar-account">
+        <div data-testid="current-user">
+          <span>当前用户</span>
+          <strong>{username ?? "正在验证"}</strong>
+        </div>
+        <button onClick={() => void logout()} type="button">退出登录</button>
+        <small>本地轻量模式 · 端口 8989</small>
+      </footer>
       {pending ? (
         <div className="delete-dialog-backdrop">
           <section

@@ -155,11 +155,143 @@ button { cursor: pointer; }
   font-size: 11px;
   line-height: 1.5;
 }
-.conversation-sidebar footer {
+.conversation-sidebar > footer {
   margin-top: auto;
   padding-top: 18px;
   color: #7e8b83;
   font-size: 10px;
+}
+.sidebar-account {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #35443b;
+}
+.sidebar-account > div { display: grid; gap: 3px; }
+.sidebar-account > div span { color: #7e8b83; }
+.sidebar-account > div strong { color: #f0eddf; font-size: 12px; }
+.sidebar-account button {
+  justify-self: start;
+  padding: 0 0 3px;
+  border: 0;
+  border-bottom: 1px solid #718078;
+  background: transparent;
+  color: #aeb8b2;
+  font-size: 10px;
+  font-weight: 800;
+}
+.sidebar-account button:hover { color: #f0eddf; border-color: #d96a5c; }
+.sidebar-account small { color: #7e8b83; }
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(380px, .92fr) minmax(520px, 1.08fr);
+  background:
+    linear-gradient(rgba(24, 34, 29, .035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24, 34, 29, .035) 1px, transparent 1px),
+    var(--paper);
+  background-size: 24px 24px;
+}
+.login-mark {
+  position: relative;
+  min-height: 100vh;
+  padding: 48px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: #17231d;
+  color: #f0eddf;
+}
+.login-mark::after {
+  content: "";
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  right: -130px;
+  bottom: -130px;
+  border: 1px solid #718078;
+  border-radius: 50%;
+  box-shadow: 0 0 0 42px rgba(113, 128, 120, .08);
+}
+.login-mark > span,
+.login-panel header > span {
+  font: 800 10px/1.4 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .14em;
+}
+.login-mark > span { color: #9eaaa3; }
+.login-mark > strong {
+  align-self: center;
+  font: 400 clamp(180px, 28vw, 360px)/.8 "STKaiti", "KaiTi", serif;
+  color: transparent;
+  -webkit-text-stroke: 1px #718078;
+  transform: rotate(-6deg);
+}
+.login-mark > p {
+  position: relative;
+  z-index: 1;
+  width: min(360px, 100%);
+  margin: 0;
+  color: #bdc7c0;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.login-panel {
+  width: min(520px, calc(100% - 96px));
+  margin: auto;
+  padding: 48px 0;
+}
+.login-panel header > span { color: var(--red); }
+.login-panel h1 {
+  margin: 12px 0 10px;
+  font-family: "STKaiti", "KaiTi", serif;
+  font-size: 52px;
+  line-height: 1.05;
+}
+.login-panel header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.login-form {
+  margin-top: 34px;
+  padding: 26px;
+  display: grid;
+  gap: 20px;
+  border: 1px solid var(--ink);
+  background: var(--white);
+  box-shadow: 7px 7px 0 var(--ink);
+}
+.login-form label { display: grid; gap: 8px; }
+.login-form label span { font-size: 11px; font-weight: 900; }
+.login-form input {
+  width: 100%;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+}
+.login-form input:focus { border-color: var(--green); outline: 1px solid var(--green); }
+.login-form p,
+.login-service-error {
+  margin: 0;
+  color: var(--red);
+  font-size: 12px;
+}
+.login-service-error { margin-top: 18px; }
+.login-form button {
+  padding: 13px 18px;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--white);
+  font-weight: 900;
+}
+.login-form button:disabled { cursor: wait; opacity: .62; }
+.login-panel > footer {
+  margin-top: 22px;
+  color: var(--muted);
+  font: 700 10px/1.6 "SFMono-Regular", Consolas, monospace;
 }
 .delete-dialog-backdrop {
   position: fixed;
