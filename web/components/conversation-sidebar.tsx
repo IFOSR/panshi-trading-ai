@@ -29,6 +29,7 @@ export function ConversationSidebar({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const fallbackFocusRef = useRef<HTMLElement | null>(null);
@@ -55,9 +56,18 @@ export function ConversationSidebar({
   }, []);
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/login");
-    router.refresh();
+    setAccountError(null);
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        setAccountError("退出失败，认证服务暂时不可用，请重试。");
+        return;
+      }
+      router.replace("/login");
+      router.refresh();
+    } catch {
+      setAccountError("退出失败，认证服务暂时不可用，请重试。");
+    }
   }
 
   useEffect(() => {
@@ -241,6 +251,7 @@ export function ConversationSidebar({
           <strong>{username ?? "正在验证"}</strong>
         </div>
         <button onClick={() => void logout()} type="button">退出登录</button>
+        {accountError ? <p role="alert">{accountError}</p> : null}
         <small>本地轻量模式 · 端口 8989</small>
       </footer>
       {pending ? (
