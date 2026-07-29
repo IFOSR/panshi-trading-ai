@@ -51,23 +51,25 @@ def test_milestone_exposes_rules_blockers_and_next_conditions() -> None:
     assert milestone.blockers == ["CONTRACT_MISSING"]
 
 
-def test_strategy_evaluation_requires_exactly_eight_unique_steps() -> None:
-    step = MilestoneResult(
-        number=1,
-        code="DATA_VALIDITY",
-        status=MilestoneStatus.CONFIRMED,
-        result="VALID",
+def test_strategy_evaluation_accepts_a_single_dynamic_step() -> None:
+    evaluation = StrategyEvaluation(
+        steps=[
+            MilestoneResult(
+                number=1,
+                code="DATA_VALIDITY",
+                status=MilestoneStatus.CONFIRMED,
+                result="VALID",
+            )
+        ]
     )
 
-    with pytest.raises(ValidationError):
-        StrategyEvaluation(steps=[step])
+    assert len(evaluation.steps) == 1
 
 
 @pytest.mark.parametrize(
     ("supporting_steps", "blocking_steps"),
     [
         ([0], []),
-        ([9], []),
         ([1, 1], []),
         ([1], [1]),
     ],

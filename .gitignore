@@ -4,13 +4,16 @@
 .pytest_cache/
 .ruff_cache/
 .venv/
+.local/
 .coverage
 __pycache__/
 *.py[cod]
 node_modules/
 web/.next/
+web/.next-playwright/
 web/playwright-report/
 web/test-results/
+web/tmp/
 web/tsconfig.tsbuildinfo
 coverage/
 htmlcov/
@@ -19,3 +22,4 @@ htmlcov/
 *.egg-info/
 data/
 artifacts/
+.gstack/

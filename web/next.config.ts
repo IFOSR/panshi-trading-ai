@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["127.0.0.1"]
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
+  allowedDevOrigins: ["127.0.0.1"],
+  experimental: {
+    middlewareClientMaxBodySize: "52mb"
+  }
 };
 
 export default nextConfig;

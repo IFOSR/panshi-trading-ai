@@ -29,6 +29,18 @@ def _validate_signature(extension: str, content: bytes) -> None:
         raise ValueError("invalid WEBP signature")
 
 
+def validate_original_image_content(filename: str, content: bytes) -> str:
+    extension = Path(filename).suffix.lower()
+    if extension not in SUPPORTED_IMAGE_EXTENSIONS:
+        raise ValueError(f"unsupported image extension: {extension}")
+    if not content:
+        raise ValueError("image is empty")
+    if len(content) > MAX_IMAGE_BYTES:
+        raise ValueError("image exceeds maximum byte size")
+    _validate_signature(extension, content)
+    return extension
+
+
 def inspect_original_image(
     path: Path,
     *,
@@ -46,16 +58,8 @@ def inspect_original_image(
     if not resolved_path.is_relative_to(resolved_root):
         raise ValueError("image path is outside the configured storage root")
 
-    extension = path.suffix.lower()
-    if extension not in SUPPORTED_IMAGE_EXTENSIONS:
-        raise ValueError(f"unsupported image extension: {extension}")
-
     content = resolved_path.read_bytes()
-    if not content:
-        raise ValueError("image is empty")
-    if len(content) > MAX_IMAGE_BYTES:
-        raise ValueError("image exceeds maximum byte size")
-    _validate_signature(extension, content)
+    extension = validate_original_image_content(path.name, content)
 
     media_type = "image/jpeg" if extension in {".jpg", ".jpeg"} else f"image/{extension[1:]}"
     return OriginalImageArtifact(

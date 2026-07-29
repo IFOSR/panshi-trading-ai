@@ -17,5 +17,5 @@ class RiskContext(BaseModel):
 
 
 class RiskResult(BaseModel):
-    status: Literal["APPROVED", "BLOCKED", "VETO"]
+    status: Literal["APPROVED", "BLOCKED", "REDUCE_REQUIRED", "VETO"]
     reason_codes: list[str] = Field(default_factory=list)

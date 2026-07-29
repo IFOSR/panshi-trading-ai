@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -10,7 +9,12 @@ from typing import Callable
 
 from pydantic import ValidationError
 
-from trading_agent.domain.evidence import Evidence, ScreenshotEvidence
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib
+
+from trading_agent.domain.evidence import Evidence, ScreenshotEvidence, StrategyEvidenceFacts
 from trading_agent.providers.base import (
     ProviderResponseError,
     ProviderUnavailable,
@@ -18,7 +22,7 @@ from trading_agent.providers.base import (
 )
 from trading_agent.providers.codex import ScreenshotExtraction, enforce_safe_usage
 from trading_agent.vision.image_quality import inspect_original_image
-from trading_agent.vision.prompts import CHART_EVIDENCE_PROMPT
+from trading_agent.vision.prompts import provider_prompt_sha256, render_provider_prompt
 
 
 Runner = Callable[
@@ -51,13 +55,44 @@ def _run(
     )
 
 
-def configured_kimi_supports_images() -> bool:
-    config_path = Path.home() / ".kimi-code" / "config.toml"
+def configured_kimi_supports_images(
+    config_path: Path | None = None,
+    model: str = "default",
+) -> bool:
+    config_path = config_path or Path.home() / ".kimi-code" / "config.toml"
     if not config_path.exists():
         return False
-    text = config_path.read_text(encoding="utf-8")
-    capability_lists = re.findall(r"capabilities\s*=\s*\[([^\]]*)\]", text)
-    return any("image_in" in capabilities for capabilities in capability_lists)
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    selected_model = config.get("default_model") if model == "default" else model
+    models = config.get("models")
+    if not isinstance(selected_model, str) or not isinstance(models, dict):
+        return False
+    selected = models.get(selected_model)
+    if not isinstance(selected, dict):
+        return False
+    capabilities = selected.get("capabilities")
+    return (
+        isinstance(capabilities, list)
+        and all(isinstance(capability, str) for capability in capabilities)
+        and "image_in" in capabilities
+    )
+
+
+def trusted_external_isolation_checker(
+    *,
+    verified: bool,
+    provider: str | None,
+) -> Callable[[], bool]:
+    provider_name = provider.strip().lower() if provider else ""
+    externally_isolated = (
+        verified
+        and bool(provider_name)
+        and not provider_name.startswith("kimi")
+    )
+    return lambda: externally_isolated
 
 
 class KimiVisionProvider:
@@ -67,15 +102,25 @@ class KimiVisionProvider:
         runner: Runner = _run,
         timeout_seconds: float = 120.0,
         capability_checker: Callable[[], bool] = configured_kimi_supports_images,
+        isolation_checker: Callable[[], bool] = lambda: False,
     ) -> None:
         self.model = model
         self.runner = runner
         self.timeout_seconds = timeout_seconds
-        self.capability_checker = capability_checker
+        self.capability_checker = (
+            capability_checker
+            if capability_checker is not configured_kimi_supports_images
+            else lambda: configured_kimi_supports_images(model=self.model)
+        )
+        self.isolation_checker = isolation_checker
 
     def analyze(self, request: VisionRequest) -> ScreenshotEvidence:
         if not self.capability_checker():
             raise ProviderUnavailable("kimi current model has no verified image capability")
+        if not self.isolation_checker():
+            raise ProviderUnavailable(
+                "kimi image provider requires a verified tool isolation boundary"
+            )
         if not request.privacy_assessment.safe_for_model:
             raise ValueError("privacy assessment blocks model transmission")
         artifacts = [
@@ -91,16 +136,17 @@ class KimiVisionProvider:
                 isolated_path = isolated_root / f"image-{index}{artifact.path.suffix.lower()}"
                 shutil.copyfile(artifact.path, isolated_path)
                 isolated_paths.append(isolated_path)
-            image_list = "\n".join(str(path) for path in isolated_paths)
-            user_context = (request.user_context or "").replace("\x00", "")[:2000]
-            prompt = (
-                CHART_EVIDENCE_PROMPT.replace("不调用任何外部工具，", "")
-                + "\n仅允许读取以下隔离目录中的原始图片文件：\n"
-                + image_list
-                + "\n只输出JSON。"
+            image_suffixes = [path.suffix for path in isolated_paths]
+            prompt = render_provider_prompt(
+                request.prompt_version,
+                provider="kimi",
+                image_suffixes=image_suffixes,
             )
-            if user_context:
-                prompt += f"\n用户上下文：{user_context}"
+            prompt_hash = provider_prompt_sha256(
+                request.prompt_version,
+                provider="kimi",
+                image_suffixes=image_suffixes,
+            )
             command = [
                 "kimi",
                 "-p",
@@ -152,6 +198,7 @@ class KimiVisionProvider:
                 provenance=f"kimi:{self.model}",
                 visible_text=observation.visible_text,
                 image_path=str(request.image_paths[observation.source_image_index]),
+                evidence_description=observation.evidence_description,
             )
             for observation in extraction.observations
             if observation.source_image_index < len(request.image_paths)
@@ -164,11 +211,27 @@ class KimiVisionProvider:
             cutoff_time=extraction.cutoff_time,
             last_bar_closed=extraction.last_bar_closed,
             indicators=extraction.indicators.model_dump(),
+            strategy_facts=StrategyEvidenceFacts.model_validate(
+                extraction.strategy_facts.model_dump()
+            ),
+            strategy_fact_support={
+                key: value
+                for key, value in extraction.strategy_fact_support.model_dump(
+                    exclude_none=True
+                ).items()
+            },
+            field_evidence_refs={
+                f"strategy_facts.{key}": value["evidence_refs"]
+                for key, value in extraction.strategy_fact_support.model_dump(
+                    exclude_none=True
+                ).items()
+            },
             observations=observations,
             blocking_issues=extraction.blocking_issues,
             allowed_usage=enforce_safe_usage(extraction),
             provider="kimi",
             model=self.model,
             prompt_version=request.prompt_version,
+            prompt_sha256=prompt_hash,
             image_sha256=artifacts[0].sha256,
         )

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Strategy walk-forward evaluation dataset",
+  "type": "object",
+  "required": ["bars", "walk_forward", "strategy_cases", "costs"],
+  "properties": {
+    "bars": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "trading_date",
+          "contract",
+          "open",
+          "close",
+          "limit_up",
+          "limit_down"
+        ],
+        "properties": {
+          "timestamp": {"type": "string", "format": "date-time"},
+          "trading_date": {"type": "string", "format": "date"},
+          "contract": {"type": "string"},
+          "open": {"type": "number"},
+          "close": {"type": "number"},
+          "limit_up": {"type": "number"},
+          "limit_down": {"type": "number"},
+          "available": {"type": "boolean", "default": true}
+        },
+        "additionalProperties": false
+      }
+    },
+    "walk_forward": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "train_start", "train_end", "test_start", "test_end"],
+        "properties": {
+          "name": {"type": "string"},
+          "train_start": {"type": "string", "format": "date-time"},
+          "train_end": {"type": "string", "format": "date-time"},
+          "test_start": {"type": "string", "format": "date-time"},
+          "test_end": {"type": "string", "format": "date-time"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "strategy_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["decision_time", "fill_time", "fold", "context", "expected"],
+        "properties": {
+          "decision_time": {"type": "string", "format": "date-time"},
+          "fill_time": {"type": "string", "format": "date-time"},
+          "fold": {"type": "string"},
+          "context": {
+            "type": "object",
+            "required": [
+              "contract",
+              "timeframe",
+              "state_bar_closed",
+              "data_cutoff_time",
+              "data_age_seconds",
+              "trend_score",
+              "price_location",
+              "position"
+            ],
+            "additionalProperties": true
+          },
+          "expected": {
+            "type": "object",
+            "required": [
+              "strategy",
+              "allowed_actions",
+              "signal_stage",
+              "upgrade_conditions",
+              "invalidation_conditions"
+            ],
+            "properties": {
+              "strategy": {"type": ["string", "null"]},
+              "allowed_actions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string"}
+              },
+              "signal_stage": {"type": "string"},
+              "upgrade_conditions": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "invalidation_conditions": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "costs": {
+      "type": "object",
+      "properties": {
+        "fee_per_contract": {"type": "number", "minimum": 0},
+        "slippage_per_contract": {"type": "number", "minimum": 0},
+        "same_day_close_fee_per_contract": {"type": "number", "minimum": 0},
+        "rollover_cost_per_contract": {"type": "number", "minimum": 0},
+        "multiplier": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

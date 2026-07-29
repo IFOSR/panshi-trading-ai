@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "磐石 | 中国期货策略代理",
-  description: "可审计的八步期货策略控制台"
+  title: "磐石交易AI",
+  description: "面向中国期货市场的可审计多模态交易分析"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

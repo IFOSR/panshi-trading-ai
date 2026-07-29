@@ -51,11 +51,16 @@ services:
     command: ["--config=/etc/otel.yaml"]
     volumes: ["./infra/otel-collector.yaml:/etc/otel.yaml:ro"]
   api:
-    build: .
+    build:
+      context: .
+      target: api
     command: sh -c "alembic upgrade head && uvicorn trading_agent.api.app:app --host 0.0.0.0 --port 8000"
     environment:
+      TRADING_AGENT_ENVIRONMENT: ${TRADING_AGENT_ENVIRONMENT:-production}
       TRADING_AGENT_ENABLE_ORDER_EXECUTION: "false"
       TRADING_AGENT_DATABASE_URL: postgresql+psycopg://trading:trading-local-only@postgres:5432/trading_agent
+      TRADING_AGENT_API_TOKEN: ${TRADING_AGENT_API_TOKEN:?required}
+      TRADING_AGENT_PRIVACY_REVIEW_TOKEN: ${TRADING_AGENT_PRIVACY_REVIEW_TOKEN:-}
       TEMPORAL_ADDRESS: temporal:7233
     ports: ["8000:8000"]
     depends_on:
@@ -65,25 +70,51 @@ services:
         condition: service_healthy
     volumes: [image-data:/app/data/images]
   worker:
-    build: .
+    build:
+      context: .
+      target: worker
+      args:
+        NODE_VERSION: ${WORKER_NODE_VERSION:-22.19.0}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.6}
+        KIMI_CLI_VERSION: ${KIMI_CLI_VERSION:-0.28.0}
     command: python -m trading_agent.workflows.worker
     environment:
+      TRADING_AGENT_ENVIRONMENT: ${TRADING_AGENT_ENVIRONMENT:-production}
       TRADING_AGENT_ENABLE_ORDER_EXECUTION: "false"
       TRADING_AGENT_DATABASE_URL: postgresql+psycopg://trading:trading-local-only@postgres:5432/trading_agent
+      TRADING_AGENT_PRIMARY_VISION_PROVIDER: ${TRADING_AGENT_PRIMARY_VISION_PROVIDER:-codex}
+      TRADING_AGENT_FALLBACK_VISION_PROVIDER: ${TRADING_AGENT_FALLBACK_VISION_PROVIDER:-kimi}
+      TRADING_AGENT_CODEX_MODEL: ${TRADING_AGENT_CODEX_MODEL:-gpt-5.6-sol}
+      TRADING_AGENT_CODEX_MODEL_PROVIDER: ${TRADING_AGENT_CODEX_MODEL_PROVIDER:?required}
+      TRADING_AGENT_CODEX_PROVIDER_BASE_URL: ${TRADING_AGENT_CODEX_PROVIDER_BASE_URL:?required}
+      TRADING_AGENT_CODEX_PROVIDER_ENV_KEY: ${TRADING_AGENT_CODEX_PROVIDER_ENV_KEY:?required}
+      TRADING_AGENT_KIMI_MODEL: ${TRADING_AGENT_KIMI_MODEL:-default}
+      TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED: ${TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED:-false}
+      TRADING_AGENT_KIMI_ISOLATION_PROVIDER: ${TRADING_AGENT_KIMI_ISOLATION_PROVIDER:-}
       TEMPORAL_ADDRESS: temporal:7233
-      CODE_CLI_API_KEY: ${CODE_CLI_API_KEY}
+      CODE_CLI_API_KEY: ${CODE_CLI_API_KEY:?required}
+      TRADING_AGENT_MARKET_DATA_URL: ${TRADING_AGENT_MARKET_DATA_URL:-}
+      TRADING_AGENT_MARKET_DATA_TOKEN: ${TRADING_AGENT_MARKET_DATA_TOKEN:-}
     depends_on:
       temporal:
         condition: service_healthy
     restart: unless-stopped
-    volumes: [image-data:/app/data/images]
+    volumes:
+      - image-data:/app/data/images
+      - kimi-config:/home/trading/.kimi-code
+      - codex-config:/home/trading/.codex
   web:
     build: ./web
     environment:
       TRADING_API_URL: http://api:8000
+      TRADING_PUBLIC_API_URL: ${TRADING_PUBLIC_API_URL:-http://localhost:8000}
+      TRADING_AGENT_API_TOKEN: ${TRADING_AGENT_API_TOKEN:?required}
+      TRADING_AGENT_PRIVACY_REVIEW_TOKEN: ${TRADING_AGENT_PRIVACY_REVIEW_TOKEN:?required}
     ports: ["3107:3000"]
     depends_on: [api]
 volumes:
   postgres-data:
   minio-data:
   image-data:
+  kimi-config:
+  codex-config:

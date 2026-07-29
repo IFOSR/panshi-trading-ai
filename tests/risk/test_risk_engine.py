@@ -21,3 +21,16 @@ def test_missing_account_risk_blocks_sizing() -> None:
 
     assert result.status == "BLOCKED"
     assert "ACCOUNT_RISK_UNKNOWN" in result.reason_codes
+
+
+def test_excess_position_risk_requests_reduction_instead_of_veto() -> None:
+    result = evaluate_risk(
+        RiskContext(
+            account_risk_limit=0.01,
+            proposed_risk=0.02,
+            correlated_exposure_exceeded=True,
+        )
+    )
+
+    assert result.status == "REDUCE_REQUIRED"
+    assert {"RISK_LIMIT_EXCEEDED", "CORRELATED_EXPOSURE"} <= set(result.reason_codes)
