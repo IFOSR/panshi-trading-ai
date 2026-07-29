@@ -199,6 +199,8 @@ let deletedCaseIds = new Set();
 let historyCleared = false;
 let deleteFailure = false;
 let extraHistoryCount = 0;
+const authSessions = new Set();
+let authSessionSequence = 0;
 
 const previousAnalysis = {
   analysis_id: "analysis-previous",
@@ -694,6 +696,43 @@ http.createServer(async (request, response) => {
     && request.headers.authorization !== "Bearer test-api-token"
   ) {
     sendJson(response, { detail: "unauthorized" }, 401);
+    return;
+  }
+  if (request.method === "POST" && request.url === "/v1/auth/login") {
+    const payload = JSON.parse((await consume(request)).toString("utf8"));
+    if (
+      payload.username !== "ylfego"
+      || payload.password !== "test-password"
+    ) {
+      sendJson(response, { detail: "invalid username or password" }, 401);
+      return;
+    }
+    authSessionSequence += 1;
+    const token = `test-session-${authSessionSequence}`;
+    authSessions.add(token);
+    sendJson(response, {
+      username: "ylfego",
+      session_token: token,
+      expires_at: "2026-07-30T00:00:00Z"
+    });
+    return;
+  }
+  if (request.method === "GET" && request.url === "/v1/auth/session") {
+    const token = request.headers["x-panshi-session"];
+    if (typeof token !== "string" || !authSessions.has(token)) {
+      sendJson(response, { detail: "invalid session" }, 401);
+      return;
+    }
+    sendJson(response, {
+      username: "ylfego",
+      expires_at: "2026-07-30T00:00:00Z"
+    });
+    return;
+  }
+  if (request.method === "POST" && request.url === "/v1/auth/logout") {
+    const token = request.headers["x-panshi-session"];
+    if (typeof token === "string") authSessions.delete(token);
+    sendJson(response, { ok: true });
     return;
   }
   if (request.method === "GET" && request.url === "/v1/strategies") {

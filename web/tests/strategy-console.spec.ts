@@ -516,7 +516,7 @@ test("rejects non-loopback access to the home page", async ({ request }) => {
   expect(response.status()).toBe(403);
 });
 
-test("serves original evidence without browser authentication", async ({
+test("serves original evidence through the authenticated browser proxy", async ({
   request
 }) => {
   const response = await request.get(
