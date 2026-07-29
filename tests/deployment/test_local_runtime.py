@@ -508,6 +508,22 @@ def test_local_runtime_is_the_primary_documented_entrypoint() -> None:
     assert ".local/" in GITIGNORE
 
 
+def test_runbook_documents_sqlite_user_authentication_operations() -> None:
+    for required in (
+        "panshi-user set-password",
+        "panshi-user disable",
+        "panshi-user enable",
+        "12 小时",
+        "SQLite 备份",
+        "迁移到其他服务器",
+        "密码轮换",
+        "会话失效",
+    ):
+        assert required in RUNBOOK
+    assert "Web 本地访问无需登录" not in RUNBOOK
+    assert "TRADING_AGENT_USER_PASSWORD" not in RUNBOOK
+
+
 def test_local_runtime_uses_web_port_8989_without_changing_api_port(
     tmp_path: Path,
 ) -> None:
@@ -684,6 +700,7 @@ def test_local_environment_template_disables_distributed_runtime() -> None:
     assert "TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED=false" in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_WEB_USERNAME" not in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_WEB_PASSWORD" not in LOCAL_ENV_EXAMPLE
+    assert "TRADING_AGENT_USER_PASSWORD" not in LOCAL_ENV_EXAMPLE
     assert "TEMPORAL_ADDRESS" not in LOCAL_ENV_EXAMPLE
     assert "postgresql" not in LOCAL_ENV_EXAMPLE.lower()
     assert "redis" not in LOCAL_ENV_EXAMPLE.lower()

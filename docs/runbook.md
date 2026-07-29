@@ -44,6 +44,19 @@ OpenCV、本地 OCR、图表切片或坐标重建。Kimi 仅作为失效关闭�
 5. 执行 `alembic upgrade head`。
 6. 从当前 shell 读取 `CODE_CLI_API_KEY` 并写入私有环境文件。
 
+初始化完成后创建第一个 SQLite 登录用户：
+
+```sh
+set -a
+. .local/env
+set +a
+.local/venv/bin/panshi-user set-password <username>
+```
+
+命令会两次隐藏读取密码。自动化初始化可使用
+`.local/venv/bin/panshi-user set-password <username> --password-stdin`，
+但密码只能通过标准输入传入，不能作为命令行参数或环境变量保存。
+
 `.env.local.example` 仅用于说明字段。实际运行读取 `.local/env`，不要把该文件
 提交到版本库。本地模式会为每次图片分析创建隔离的临时 `CODEX_HOME`，因此不会
 复制或读取 `~/.codex/auth.json` 中的 OAuth 登录态。运行 `init` 前必须在当前
@@ -92,12 +105,35 @@ TRADING_AGENT_TQSDK_PASSWORD=your-free-tq-password
 - API：`http://127.0.0.1:8000/docs`
 - Web：`http://127.0.0.1:8989`
 
-Web 本地访问无需登录。服务端访问 API 时使用 `.local/env` 中的 Bearer Token，
-该密钥不会下发到浏览器 JavaScript。
+Web 使用 SQLite 账户登录。浏览器只保存 12 小时绝对有效期的 HttpOnly 会话
+Cookie；FastAPI 数据库只保存会话令牌的 SHA-256 摘要。服务端访问 API 时使用
+`.local/env` 中的 Bearer Token，该密钥不会下发到浏览器 JavaScript。
+
+## 用户与会话管理
+
+先加载本地数据库地址，再执行用户管理命令：
+
+```sh
+set -a
+. .local/env
+set +a
+
+.local/venv/bin/panshi-user set-password <username>
+.local/venv/bin/panshi-user disable <username>
+.local/venv/bin/panshi-user enable <username>
+```
+
+- `set-password` 创建用户或执行密码轮换。密码轮换会删除该用户的全部现有会话，
+  所有浏览器立即会话失效，需要使用新密码重新登录。
+- `disable` 停用账户并立即删除全部会话。
+- `enable` 重新启用账户，但不会恢复旧会话，用户仍需重新登录。
+- 用户名会去除首尾空格并转换为小写；密码只以带随机盐的 scrypt 哈希保存。
+- 会话采用 12 小时绝对有效期，不会因持续使用而无限延期。
 
 ## 用户交互
 
-打开 `http://127.0.0.1:8989` 后，首页是桌面对话工作台。左侧显示最近对话，
+打开 `http://127.0.0.1:8989` 后先使用 SQLite 用户登录。登录后的首页是桌面
+对话工作台。左侧显示最近对话，
 中间是与磐石交易AI的主对话，右侧显示当前策略原则。用户选择策略、输入问题并
 上传一至两张完整行情截图即可开始；合约、收盘状态、持仓量和执行周期行情优先由
 多模态模型与公开数据源自动识别或补齐。
@@ -169,6 +205,35 @@ cd ..
 - 端口被其他程序占用：先停止占用 `8000` 或 `8989` 的程序，再重新启动。
 - 数据库需要重建：先停止服务，备份 `.local/data`，再处理 SQLite 文件并重新
   执行 `init`。不要在运行中删除数据库或原图。
+- 登录后立即返回登录页：确认 API 已启动，并检查账户是否被停用、会话是否超过
+  12 小时；必要时执行密码轮换后重新登录。
+
+## SQLite 备份、恢复与服务器迁移
+
+SQLite 备份必须在停止服务后执行，确保数据库与原图处于一致状态：
+
+```sh
+./trading-agent.sh stop
+cp -p .local/data/trading-agent.db /安全备份目录/trading-agent.db
+cp -R .local/data/images /安全备份目录/images
+```
+
+恢复时先停止服务，把数据库和图片目录放回 `.local/data`，确认目录仅对运行用户
+可读写，然后执行 `./bin/trading-agent-local init` 和
+`./bin/trading-agent-local doctor`。`init` 会将旧数据库迁移到当前 Alembic
+版本，不会要求把账户密码重新写入源码或环境文件。
+
+迁移到其他服务器有两种方式：
+
+1. 停止旧服务器，复制 `.local/data/trading-agent.db` 与
+   `.local/data/images` 到新服务器同一运行目录，再执行初始化和诊断。用户哈希
+   与未过期会话会随 SQLite 数据库迁移；如不希望保留会话，迁移后执行一次密码
+   轮换。
+2. 在新服务器执行初始化得到空数据库，再运行 `panshi-user set-password`
+   创建用户，并单独迁移需要保留的业务数据与原图。
+
+恢复或迁移完成后，依次验证登录、刷新保持、退出、错误密码和重新登录，再开始
+新的策略分析。
 
 ## 验收
 
