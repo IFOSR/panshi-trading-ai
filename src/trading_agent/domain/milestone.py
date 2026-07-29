@@ -4,8 +4,9 @@ from trading_agent.domain.enums import MilestoneStatus
 
 
 class MilestoneResult(BaseModel):
-    number: int = Field(ge=1, le=8)
+    number: int = Field(ge=1)
     code: str
+    title: str | None = Field(default=None, min_length=1, max_length=120)
     status: MilestoneStatus
     result: str
     rule_ids: list[str] = Field(default_factory=list)
@@ -16,11 +17,13 @@ class MilestoneResult(BaseModel):
 
 
 class StrategyEvaluation(BaseModel):
-    steps: list[MilestoneResult]
+    steps: list[MilestoneResult] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_complete_pipeline(self) -> "StrategyEvaluation":
         numbers = [step.number for step in self.steps]
-        if sorted(numbers) != list(range(1, 9)):
-            raise ValueError("strategy evaluation must contain each milestone 1 through 8 once")
+        if sorted(numbers) != list(range(1, len(numbers) + 1)):
+            raise ValueError(
+                "strategy evaluation milestone numbers must be unique contiguous values"
+            )
         return self

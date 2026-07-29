@@ -10,12 +10,17 @@ def make_confirmed_decision_input(**overrides: object) -> DecisionInput:
         "contract": "rb2610",
         "timeframe": "1d",
         "state_bar_closed": True,
+        "data_cutoff_time": "2026-07-20",
+        "data_age_seconds": 0,
+        "max_data_age_seconds": 129_600,
         "prior_market_state": "T-",
         "trend_score": -3,
-        "price_location": "PULLBACK_RESISTANCE",
+        "price_location": "BELOW_BOLL_MID_ABOVE_LOWER",
         "open_interest_change": 1000,
         "momentum_state": "BEARISH_STRENGTHENING",
         "price_confirmation": True,
+        "price_confirmation_direction": "BEARISH",
+        "price_confirmation_type": "PULLBACK",
         "position": PositionDirection.FLAT,
     }
     values.update(overrides)

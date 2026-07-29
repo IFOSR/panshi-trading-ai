@@ -1,5 +1,17 @@
-import { redirect } from "next/navigation";
+import { AnalysisInput } from "../components/analysis-input";
+import { getRecentConversations, getStrategies } from "../lib/api";
 
-export default function Home() {
-  redirect("/cases/case-1");
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const [strategies, conversations] = await Promise.all([
+    getStrategies(),
+    getRecentConversations()
+  ]);
+  return (
+    <AnalysisInput
+      conversations={conversations}
+      strategies={strategies}
+    />
+  );
 }

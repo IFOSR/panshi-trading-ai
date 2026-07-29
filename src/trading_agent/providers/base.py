@@ -3,6 +3,11 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
+from trading_agent.clarification.models import (
+    ClarificationProposal,
+    ClarificationQuestion,
+)
+from trading_agent.conversation.models import ConversationReply, ConversationRequest
 from trading_agent.domain.evidence import ScreenshotEvidence
 from trading_agent.vision.privacy import PrivacyAssessment
 
@@ -25,4 +30,23 @@ class VisionRequest(BaseModel):
 
 class VisionProvider(Protocol):
     def analyze(self, request: VisionRequest) -> ScreenshotEvidence:
+        ...
+
+
+class ClarificationRequest(BaseModel):
+    clarification_id: str
+    case_id: str
+    source_analysis_id: str
+    user_message: str = Field(min_length=1, max_length=4000)
+    questions: list[ClarificationQuestion] = Field(min_length=1)
+    evidence_summary: str = Field(max_length=8000)
+
+
+class ClarificationProvider(Protocol):
+    def interpret(self, request: ClarificationRequest) -> ClarificationProposal:
+        ...
+
+
+class ConversationProvider(Protocol):
+    def reply(self, request: ConversationRequest) -> ConversationReply:
         ...

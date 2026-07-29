@@ -1,11 +1,38 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vision evaluation record",
   "type": "object",
-  "required": ["image_path", "split", "labels"],
+  "required": [
+    "record_id",
+    "dataset_version",
+    "image_path",
+    "split",
+    "labels"
+  ],
   "properties": {
-    "image_path": {"type": "string"},
-    "split": {"enum": ["train", "validation", "test"]},
-    "labels": {"type": "object"}
+    "record_id": {"type": "string", "minLength": 1},
+    "dataset_version": {"type": "string", "minLength": 1},
+    "image_path": {"type": "string", "minLength": 1},
+    "previous_image_path": {"type": "string", "minLength": 1},
+    "split": {"const": "test"},
+    "labels": {
+      "type": "object",
+      "required": [
+        "critical_metadata",
+        "visible_numbers",
+        "screenshot_role",
+        "change",
+        "market_state"
+      ],
+      "properties": {
+        "critical_metadata": {"type": "object"},
+        "visible_numbers": {"type": "object"},
+        "screenshot_role": {"type": "string"},
+        "change": {"type": "string"},
+        "market_state": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

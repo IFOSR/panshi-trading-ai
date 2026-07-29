@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -9,11 +10,39 @@ from trading_agent.providers.base import ProviderUnavailable, VisionRequest
 from trading_agent.providers.codex import CodexVisionProvider
 from trading_agent.providers.codex import ScreenshotExtraction
 from trading_agent.providers.fallback import FallbackVisionProvider
-from trading_agent.providers.kimi import KimiVisionProvider
+from trading_agent.providers import kimi
+from trading_agent.providers.kimi import KimiVisionProvider, configured_kimi_supports_images
 from trading_agent.vision.privacy import PrivacyAssessment
+from trading_agent.vision.prompts import prompt_sha256, resolve_prompt
 
 
 FIXTURE = Path("tests/fixtures/charts/daily_boll_macd_volume.png")
+
+
+def unknown_strategy_facts() -> dict[str, object]:
+    return {
+        "trend_bias": "UNKNOWN",
+        "price_location": "UNKNOWN",
+        "volume_state": "UNKNOWN",
+        "momentum_state": "UNKNOWN",
+        "position_behavior": "UNKNOWN",
+        "price_confirmation": None,
+        "price_confirmation_direction": "UNKNOWN",
+        "price_confirmation_type": "UNKNOWN",
+    }
+
+
+def unknown_strategy_fact_support() -> dict[str, object]:
+    return {
+        "trend_bias": None,
+        "price_location": None,
+        "volume_state": None,
+        "momentum_state": None,
+        "position_behavior": None,
+        "price_confirmation": None,
+        "price_confirmation_direction": None,
+        "price_confirmation_type": None,
+    }
 
 
 def make_request() -> VisionRequest:
@@ -48,6 +77,9 @@ def test_codex_command_attaches_original_image_and_schema(tmp_path: Path) -> Non
     assert str(FIXTURE) in command
     assert "--output-schema" in command
     assert "gpt-5.6-sol" in command
+    assert "--ignore-user-config" not in command
+    assert not any("model_provider=" in item for item in command)
+    assert not any("code-cli.cn" in item for item in command)
 
 
 def test_codex_output_schema_forbids_additional_properties_recursively() -> None:
@@ -87,6 +119,8 @@ def test_codex_parses_strict_json_and_adds_provenance() -> None:
             "position_behavior": None,
             "notes": [],
         },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
         "observations": [],
         "blocking_issues": ["CONTRACT_MISSING"],
         "allowed_usage": "QUALITATIVE_ONLY",
@@ -111,7 +145,34 @@ def test_codex_parses_strict_json_and_adds_provenance() -> None:
     assert evidence.timeframe == "1d"
     assert evidence.provider == "codex"
     assert evidence.model == "gpt-5.6-sol"
+    assert evidence.prompt_sha256 == prompt_sha256("chart-evidence-v1")
     assert evidence.image_sha256
+
+
+def test_codex_rejects_unknown_prompt_version_before_runner() -> None:
+    called = False
+
+    def runner(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runner must not execute for an unknown prompt")
+
+    request = make_request().model_copy(
+        update={"prompt_version": "chart-evidence-v999"}
+    )
+
+    with pytest.raises(ValueError, match="unknown prompt version"):
+        CodexVisionProvider(runner=runner).analyze(request)
+
+    assert called is False
+
+
+def test_chart_prompt_does_not_block_on_missing_individual_daily_ticks() -> None:
+    prompt = resolve_prompt("chart-evidence-v2")
+
+    assert "日线图不要求逐一显示每个交易日的日期刻度" in prompt
+    assert "缺少逐日日期刻度本身不得写入 blocking_issues" in prompt
+    assert "结构化行情将校验精确截止时间和收盘状态" in prompt
 
 
 def test_codex_downgrades_exact_usage_when_critical_fields_are_missing() -> None:
@@ -129,6 +190,8 @@ def test_codex_downgrades_exact_usage_when_critical_fields_are_missing() -> None
             "position_behavior": None,
             "notes": [],
         },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
         "observations": [],
         "blocking_issues": ["CONTRACT_MISSING", "BAR_CLOSE_UNKNOWN"],
         "allowed_usage": "EXACT",
@@ -183,7 +246,11 @@ def test_kimi_rejects_text_only_model_response() -> None:
             stderr="",
         )
 
-    provider = KimiVisionProvider(runner=runner, capability_checker=lambda: True)
+    provider = KimiVisionProvider(
+        runner=runner,
+        capability_checker=lambda: True,
+        isolation_checker=lambda: True,
+    )
 
     with pytest.raises(ProviderUnavailable, match="image"):
         provider.analyze(
@@ -191,7 +258,9 @@ def test_kimi_rejects_text_only_model_response() -> None:
         )
 
 
-def test_codex_runs_in_isolated_directory_with_rules_disabled() -> None:
+def test_codex_runs_in_isolated_directory_with_rules_disabled(
+    tmp_path: Path,
+) -> None:
     captured: dict[str, object] = {}
     payload = {
         "image_role": "STATE_DAILY",
@@ -207,6 +276,8 @@ def test_codex_runs_in_isolated_directory_with_rules_disabled() -> None:
             "position_behavior": None,
             "notes": [],
         },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
         "observations": [],
         "blocking_issues": ["CONTRACT_MISSING"],
         "allowed_usage": "QUALITATIVE_ONLY",
@@ -219,22 +290,233 @@ def test_codex_runs_in_isolated_directory_with_rules_disabled() -> None:
         stdin: str,
         env: dict[str, str],
     ) -> CompletedProcess[str]:
-        captured.update(command=command, cwd=cwd, stdin=stdin, env=env)
+        captured.update(
+            command=command,
+            cwd=cwd,
+            stdin=stdin,
+            env=env,
+            config=(Path(env["CODEX_HOME"]) / "config.toml").read_text(
+                encoding="utf-8"
+            ),
+        )
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text(json.dumps(payload), encoding="utf-8")
         return CompletedProcess(command, 0, stdout="", stderr="")
 
-    CodexVisionProvider(runner=runner).analyze(make_request())
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        codex_home = tmp_path / "codex-home"
+        codex_home.mkdir()
+        (codex_home / "config.toml").write_text(
+            '\n'.join(
+                [
+                    'model_provider = "machine-default"',
+                    '[model_providers.machine-default]',
+                    'env_key = "MACHINE_DEFAULT_API_KEY"',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        monkeypatch.setenv("MACHINE_DEFAULT_API_KEY", "test-key")
+        monkeypatch.setenv("CODE_CLI_API_KEY", "must-not-be-forwarded")
+        monkeypatch.setenv("UNRELATED_SECRET", "must-not-be-forwarded")
+        evidence = CodexVisionProvider(runner=runner).analyze(
+            make_request().model_copy(update={"user_context": "ignored metadata"})
+        )
 
     command = captured["command"]
     assert isinstance(command, list)
-    assert "--ignore-user-config" in command
+    assert "--ignore-user-config" not in command
     assert "--ignore-rules" in command
     assert captured["cwd"] != Path.cwd()
     assert command[-1] == "-"
     assert "中国期货交易截图证据抽取器" in str(captured["stdin"])
-    assert 'model_provider="code-cli"' in command
-    assert "CODE_CLI_API_KEY" in captured["env"]
+    assert evidence.prompt_sha256 == sha256(
+        str(captured["stdin"]).encode("utf-8")
+    ).hexdigest()
+    assert "ignored metadata" not in str(captured["stdin"])
+    assert not any("model_provider=" in item for item in command)
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["MACHINE_DEFAULT_API_KEY"] == "test-key"
+    assert Path(environment["HOME"]) == captured["cwd"]
+    assert Path(environment["TMPDIR"]).parent == captured["cwd"]
+    isolated_codex_home = Path(environment["CODEX_HOME"])
+    assert isolated_codex_home.parent == captured["cwd"]
+    isolated_config = captured["config"]
+    assert isinstance(isolated_config, str)
+    assert 'default_permissions = "vision-read"' in isolated_config
+    assert 'inherit = "none"' in isolated_config
+    assert '":workspace_roots" = "read"' in isolated_config
+    assert "enabled = false" in isolated_config
+    assert "[mcp_servers." not in isolated_config
+    assert "--strict-config" in command
+    assert "--sandbox" not in command
+    assert "CODE_CLI_API_KEY" not in environment
+    assert "UNRELATED_SECRET" not in environment
+
+
+def test_kimi_hashes_the_exact_prompt_passed_to_the_cli() -> None:
+    captured: dict[str, object] = {}
+    payload = {
+        "image_role": "STATE_DAILY",
+        "instrument": None,
+        "contract": None,
+        "timeframe": "1d",
+        "cutoff_time": None,
+        "last_bar_closed": None,
+        "indicators": {
+            "boll": None,
+            "macd": None,
+            "volume": None,
+            "position_behavior": None,
+            "notes": [],
+        },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
+        "observations": [],
+        "blocking_issues": ["CONTRACT_MISSING"],
+        "allowed_usage": "QUALITATIVE_ONLY",
+    }
+
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
+        captured["prompt"] = command[command.index("-p") + 1]
+        return CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+    evidence = KimiVisionProvider(
+        runner=runner,
+        capability_checker=lambda: True,
+        isolation_checker=lambda: True,
+    ).analyze(
+        make_request().model_copy(update={"user_context": "ignored metadata"})
+    )
+
+    prompt = str(captured["prompt"])
+    assert evidence.prompt_sha256 == sha256(prompt.encode("utf-8")).hexdigest()
+    assert "image-0.png" in prompt
+    assert str(FIXTURE.resolve()) not in prompt
+    assert "ignored metadata" not in prompt
+
+
+def test_codex_explicit_provider_works_without_machine_config(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    payload = {
+        "image_role": "STATE_DAILY",
+        "instrument": None,
+        "contract": None,
+        "timeframe": "1d",
+        "cutoff_time": None,
+        "last_bar_closed": None,
+        "indicators": {
+            "boll": None,
+            "macd": None,
+            "volume": None,
+            "position_behavior": None,
+            "notes": [],
+        },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
+        "observations": [],
+        "blocking_issues": ["CONTRACT_MISSING"],
+        "allowed_usage": "QUALITATIVE_ONLY",
+    }
+
+    def runner(
+        command: list[str],
+        timeout: float,
+        cwd: Path,
+        stdin: str,
+        env: dict[str, str],
+    ) -> CompletedProcess[str]:
+        captured.update(
+            command=command,
+            cwd=cwd,
+            env=env,
+            config=(Path(env["CODEX_HOME"]) / "config.toml").read_text(
+                encoding="utf-8"
+            ),
+        )
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(payload), encoding="utf-8")
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("CODE_CLI_API_KEY", "compose-key")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-codex-home"))
+        provider = CodexVisionProvider(
+            model="gpt-5.6-sol",
+            model_provider="code-cli",
+            provider_base_url="https://provider.example/v1",
+            provider_env_key="CODE_CLI_API_KEY",
+            runner=runner,
+        )
+        evidence = provider.analyze(make_request())
+
+    assert evidence.provider == "codex"
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["CODE_CLI_API_KEY"] == "compose-key"
+    config = captured["config"]
+    assert isinstance(config, str)
+    assert 'model_provider = "code-cli"' in config
+    assert 'base_url = "https://provider.example/v1"' in config
+    assert 'env_key = "CODE_CLI_API_KEY"' in config
+
+
+def test_codex_explicit_provider_fails_before_runner_when_credential_is_missing(
+    monkeypatch,
+) -> None:
+    called = False
+
+    def runner(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("runner must not execute without provider credential")
+
+    monkeypatch.delenv("PRIVATE_MODEL_KEY", raising=False)
+    provider = CodexVisionProvider(
+        model_provider="private-provider",
+        provider_base_url="https://model.example/v1",
+        provider_env_key="PRIVATE_MODEL_KEY",
+        runner=runner,
+    )
+
+    with pytest.raises(ProviderUnavailable, match="PRIVATE_MODEL_KEY"):
+        provider.analyze(make_request())
+
+    assert called is False
+
+
+def test_codex_provider_override_is_written_to_isolated_config_not_cli(
+    tmp_path: Path,
+) -> None:
+    provider = CodexVisionProvider(
+        model="gpt-5.6-sol",
+        model_provider="private-provider",
+        provider_base_url="https://model.example/v1",
+        provider_env_key="PRIVATE_MODEL_KEY",
+    )
+
+    command = provider.build_command(
+        request=make_request(),
+        schema_path=tmp_path / "schema.json",
+        output_path=tmp_path / "output.json",
+    )
+
+    assert not any("model_provider=" in item for item in command)
 
 
 def test_unsafe_privacy_assessment_blocks_provider_before_runner() -> None:
@@ -275,6 +557,63 @@ def test_kimi_without_verified_image_capability_is_unavailable() -> None:
         provider.analyze(make_request())
 
 
+def test_kimi_requires_a_verified_tool_isolation_boundary() -> None:
+    provider = KimiVisionProvider(capability_checker=lambda: True)
+
+    with pytest.raises(ProviderUnavailable, match="isolation"):
+        provider.analyze(make_request())
+
+
+@pytest.mark.parametrize(
+    ("verified", "provider"),
+    [
+        (False, "docker-hardened-worker-v1"),
+        (True, None),
+        (True, ""),
+        (True, "kimi-cli"),
+    ],
+)
+def test_kimi_external_isolation_checker_fails_closed(
+    verified: bool,
+    provider: str | None,
+) -> None:
+    checker = kimi.trusted_external_isolation_checker(
+        verified=verified,
+        provider=provider,
+    )
+
+    assert checker() is False
+
+
+def test_kimi_external_isolation_checker_accepts_trusted_os_boundary() -> None:
+    checker = kimi.trusted_external_isolation_checker(
+        verified=True,
+        provider="docker-hardened-worker-v1",
+    )
+
+    assert checker() is True
+
+
+def test_kimi_capability_check_is_bound_to_the_selected_default_model(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'default_model = "text-only"',
+                "[models.text-only]",
+                'capabilities = ["text_in"]',
+                "[models.vision-capable]",
+                'capabilities = ["text_in", "image_in"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert configured_kimi_supports_images(config_path=config_path) is False
+
+
 def test_model_output_cannot_grant_exact_usage() -> None:
     payload = {
         "image_role": "STATE_DAILY",
@@ -290,6 +629,8 @@ def test_model_output_cannot_grant_exact_usage() -> None:
             "position_behavior": None,
             "notes": [],
         },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
         "observations": [],
         "blocking_issues": [],
         "allowed_usage": "EXACT",
@@ -348,6 +689,8 @@ def test_visible_calendar_date_is_normalized_without_inventing_time() -> None:
             "position_behavior": None,
             "notes": [],
         },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
         "observations": [],
         "blocking_issues": ["BAR_CLOSE_UNKNOWN"],
         "allowed_usage": "QUALITATIVE_ONLY",
@@ -356,3 +699,30 @@ def test_visible_calendar_date_is_normalized_without_inventing_time() -> None:
     extraction = ScreenshotExtraction.model_validate(payload)
 
     assert extraction.cutoff_time == "2026-07-20"
+
+
+def test_visible_intraday_time_without_zone_assumes_china_futures_timezone() -> None:
+    payload = {
+        "image_role": "EXECUTION_60M",
+        "instrument": "棉花",
+        "contract": "cf2609",
+        "timeframe": "60m",
+        "cutoff_time": "2026-07-22 14:59",
+        "last_bar_closed": True,
+        "indicators": {
+            "boll": None,
+            "macd": None,
+            "volume": None,
+            "position_behavior": None,
+            "notes": [],
+        },
+        "strategy_facts": unknown_strategy_facts(),
+        "strategy_fact_support": unknown_strategy_fact_support(),
+        "observations": [],
+        "blocking_issues": [],
+        "allowed_usage": "QUALITATIVE_ONLY",
+    }
+
+    extraction = ScreenshotExtraction.model_validate(payload)
+
+    assert extraction.cutoff_time == "2026-07-22T14:59:00+08:00"

@@ -1,6 +1,6 @@
 from trading_agent.domain.enums import MilestoneStatus
 from trading_agent.domain.milestone import MilestoneResult
-from trading_agent.strategy.context import StrategyContext
+from trading_agent.strategy.context import StrategyContext, evidence_refs_for
 
 
 def evaluate(context: StrategyContext) -> MilestoneResult:
@@ -22,5 +22,5 @@ def evaluate(context: StrategyContext) -> MilestoneResult:
         status=MilestoneStatus.CONFIRMED,
         result=result,
         rule_ids=["MS-001"],
-        evidence_refs=context.evidence_refs,
+        evidence_refs=evidence_refs_for(context, "trend_score"),
     )

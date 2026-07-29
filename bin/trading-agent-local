@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  exec python3 -m trading_agent.local_runtime --project-root "$ROOT" "$@"

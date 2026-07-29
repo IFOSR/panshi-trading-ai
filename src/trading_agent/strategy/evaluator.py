@@ -16,7 +16,10 @@ def evaluate_strategy(context: StrategyContext) -> StrategyEvaluation:
     steps = [
         step1, step2, step3, price_location.evaluate(context),
         position_behavior.evaluate(context), momentum.evaluate(context),
-        price_confirmation.evaluate(context, step3.status == MilestoneStatus.CONFIRMED),
+        price_confirmation.evaluate(
+            context,
+            step3.result if step3.status == MilestoneStatus.CONFIRMED else None,
+        ),
     ]
     risk_ok = context.risk_status == "APPROVED"
     steps.append(MilestoneResult(
