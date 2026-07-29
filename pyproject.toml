@@ -31,6 +31,7 @@ dev = [
 
 [project.scripts]
 trading-agent-local = "trading_agent.local_runtime:main"
+panshi-user = "trading_agent.auth.cli:entrypoint"
 
 [build-system]
 requires = ["setuptools>=69"]
