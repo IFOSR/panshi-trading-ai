@@ -46,6 +46,21 @@ class AuthRepository:
         self.session.flush()
         return self._user_payload(user)
 
+    def get_user_credentials(self, username: str) -> dict | None:
+        user = self.session.scalar(
+            select(UserRecord).where(
+                UserRecord.username == normalize_username(username)
+            )
+        )
+        if user is None:
+            return None
+        return {
+            "user_id": user.user_id,
+            "username": user.username,
+            "password_hash": user.password_hash,
+            "is_active": user.is_active,
+        }
+
     def set_active(
         self,
         username: str,
