@@ -2,27 +2,33 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-README_PATH = PROJECT_ROOT / "README.md"
-README = (
-    README_PATH.read_text(encoding="utf-8")
-    if README_PATH.is_file()
-    else ""
-)
+CHINESE_PATH = PROJECT_ROOT / "README.md"
+ENGLISH_PATH = PROJECT_ROOT / "README.en.md"
 
 
-def test_readme_offers_complete_language_navigation() -> None:
-    assert README_PATH.is_file()
-    assert '<a id="language"></a>' in README
-    assert "[中文](#中文)" in README
-    assert "[English](#english)" in README
-    assert '<a id="中文"></a>' in README
-    assert '<a id="english"></a>' in README
-    assert README.count("[返回语言选择](#language)") >= 1
-    assert README.count("[Back to language selector](#language)") >= 1
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
-def test_readme_explains_the_logical_architecture_and_trust_chain() -> None:
-    required = (
+CHINESE = _read(CHINESE_PATH)
+ENGLISH = _read(ENGLISH_PATH)
+
+
+def test_readmes_are_separate_pages_with_chinese_as_default() -> None:
+    assert CHINESE_PATH.is_file()
+    assert ENGLISH_PATH.is_file()
+    assert "**中文** | [English](README.en.md)" in CHINESE
+    assert "[中文](README.md) | **English**" in ENGLISH
+    assert '<a id="中文"></a>' not in CHINESE
+    assert '<a id="english"></a>' not in CHINESE
+    assert "# English" not in CHINESE
+    assert "# 中文" not in ENGLISH
+    assert "What is Panshi Trading AI?" not in CHINESE
+    assert "磐石交易AI是什么" not in ENGLISH
+
+
+def test_each_page_explains_the_logical_architecture_and_trust_chain() -> None:
+    shared = (
         "```mermaid",
         "Next.js",
         "FastAPI",
@@ -30,27 +36,39 @@ def test_readme_explains_the_logical_architecture_and_trust_chain() -> None:
         "Codex",
         "TqSdk",
         "AkShare",
-        "Strategy Registry",
-        "Risk Engine",
+        "OpenCV",
+    )
+    chinese = (
+        "逻辑架构",
         "策略注册表",
         "风险引擎",
-        "OpenCV",
-        "local OCR",
         "本地 OCR",
-        "cannot independently decide",
         "不能独立决定",
     )
+    english = (
+        "Logical architecture",
+        "Strategy Registry",
+        "Risk Engine",
+        "local OCR",
+        "cannot independently decide",
+    )
 
-    for text in required:
-        assert text in README
+    for text in shared:
+        assert text in CHINESE
+        assert text in ENGLISH
+    for text in chinese:
+        assert text in CHINESE
+    for text in english:
+        assert text in ENGLISH
 
 
-def test_readme_contains_an_executable_local_installation_path() -> None:
-    required = (
+def test_each_page_contains_an_executable_local_installation_path() -> None:
+    shared = (
         "Python 3.10",
         "Node.js 20",
         "codex --version",
         "export CODE_CLI_API_KEY=<your-code-cli-api-key>",
+        "git clone https://github.com/IFOSR/panshi-trading-ai.git",
         "./bin/trading-agent-local init",
         "./bin/trading-agent-local doctor",
         ". .local/env",
@@ -64,48 +82,66 @@ def test_readme_contains_an_executable_local_installation_path() -> None:
         "http://127.0.0.1:8000/docs",
     )
 
-    for text in required:
-        assert text in README
+    for text in shared:
+        assert text in CHINESE
+        assert text in ENGLISH
+    assert "公开仓库无需登录即可克隆" in CHINESE
+    assert "The public repository can be cloned without signing in" in ENGLISH
 
 
-def test_readme_documents_public_repository_cloning() -> None:
-    assert "git clone https://github.com/IFOSR/panshi-trading-ai.git" in README
-    assert "公开仓库无需登录即可克隆" in README
-    assert "The public repository can be cloned without signing in" in README
-    assert "private repository" not in README
-
-
-def test_readme_documents_persistence_accounts_and_operations() -> None:
-    required = (
+def test_each_page_documents_accounts_runtime_paths_and_sessions() -> None:
+    shared = (
         ".local/data/trading-agent.db",
         ".local/data/images",
         ".local/logs/api.log",
         ".local/logs/web.log",
         "panshi-user disable <username>",
         "panshi-user enable <username>",
-        "12 小时",
-        "12-hour",
-        "SQLite 备份",
-        "SQLite backup",
-        "服务器迁移",
-        "server migration",
     )
 
-    for text in required:
-        assert text in README
+    for text in shared:
+        assert text in CHINESE
+        assert text in ENGLISH
+    assert "12 小时" in CHINESE
+    assert "12-hour" in ENGLISH
 
 
-def test_readme_documents_market_data_and_safety_defaults() -> None:
-    required = (
+def test_each_page_documents_market_data_and_safety_defaults() -> None:
+    shared = (
         "TRADING_AGENT_TQSDK_USERNAME",
         "TRADING_AGENT_TQSDK_PASSWORD",
         "TRADING_AGENT_MARKET_DATA_PROVIDER=free",
-        "AkShare fallback",
-        "AkShare 降级",
         "TRADING_AGENT_ENABLE_ORDER_EXECUTION=false",
-        "不连接实盘下单网关",
-        "does not connect to a live order gateway",
     )
 
-    for text in required:
-        assert text in README
+    for text in shared:
+        assert text in CHINESE
+        assert text in ENGLISH
+    assert "AkShare 降级" in CHINESE
+    assert "AkShare fallback" in ENGLISH
+    assert "不连接实盘下单网关" in CHINESE
+    assert "does not connect to a live order gateway" in ENGLISH
+
+
+def test_excluded_operational_sections_are_absent() -> None:
+    forbidden_chinese = (
+        "### SQLite 备份",
+        "### 恢复",
+        "### 服务器迁移",
+        "/safe/backup/panshi",
+        ".before-restore-",
+        "rm -rf",
+    )
+    forbidden_english = (
+        "### SQLite backup",
+        "### Restore",
+        "### Server migration",
+        "/safe/backup/panshi",
+        ".before-restore-",
+        "rm -rf",
+    )
+
+    for text in forbidden_chinese:
+        assert text not in CHINESE
+    for text in forbidden_english:
+        assert text not in ENGLISH
