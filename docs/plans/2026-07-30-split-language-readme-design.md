@@ -66,4 +66,3 @@ The documentation contract will verify:
 - architecture, installation, account, market-data, and safety details remain
   complete in each language;
 - backup, restore, migration, and destructive restore commands are absent.
-
