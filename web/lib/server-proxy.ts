@@ -1,4 +1,9 @@
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const LOOPBACK_HOSTS = new Set([
+  "127.0.0.1",
+  "localhost",
+  "panshi.localhost",
+  "[::1]"
+]);
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;

@@ -22,7 +22,13 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   } catch {
     headerHostname = "";
   }
-  const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"];
+  const loopback = [
+    "127.0.0.1",
+    "localhost",
+    "panshi.localhost",
+    "::1",
+    "[::1]"
+  ];
   if (
     !loopback.includes(request.nextUrl.hostname)
     || !loopback.includes(headerHostname)

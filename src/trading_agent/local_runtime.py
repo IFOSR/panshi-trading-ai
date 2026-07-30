@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 API_HOST = "127.0.0.1"
 API_PORT = 8000
 WEB_HOST = "127.0.0.1"
+WEB_BIND_HOST = "panshi.localhost"
 WEB_PORT = 8989
 SERVICE_ORDER = ("api", "web")
 LOCAL_REQUIRED_SETTINGS = (
@@ -297,7 +298,7 @@ def service_commands(paths: LocalPaths) -> dict[str, list[str]]:
             "start",
             "--",
             "--hostname",
-            WEB_HOST,
+            WEB_BIND_HOST,
             "--port",
             str(WEB_PORT),
         ],
@@ -358,9 +359,26 @@ def _ensure_python_dependencies(paths: LocalPaths) -> None:
     )
 
 
-def _ensure_web_build(paths: LocalPaths) -> None:
+def _ensure_web_dependencies(paths: LocalPaths) -> bool:
+    install_lock = paths.web_root / "node_modules" / ".package-lock.json"
+    sources = (
+        paths.web_root / "package.json",
+        paths.web_root / "package-lock.json",
+    )
+    if install_lock.is_file():
+        install_timestamp = install_lock.stat().st_mtime
+        if all(
+            not source.is_file() or source.stat().st_mtime <= install_timestamp
+            for source in sources
+        ):
+            return False
+    _run_checked(["npm", "ci", "--prefer-offline"], cwd=paths.web_root)
+    return True
+
+
+def _ensure_web_build(paths: LocalPaths, *, force: bool = False) -> None:
     build_id = paths.web_root / ".next" / "BUILD_ID"
-    if build_id.is_file():
+    if not force and build_id.is_file():
         build_timestamp = build_id.stat().st_mtime
         source_roots = (
             paths.web_root / "app",
@@ -392,9 +410,8 @@ def _ensure_web_build(paths: LocalPaths) -> None:
 
 def _install_dependencies(paths: LocalPaths) -> None:
     _ensure_python_dependencies(paths)
-    if not (paths.web_root / "node_modules").is_dir():
-        _run_checked(["npm", "ci", "--prefer-offline"], cwd=paths.web_root)
-    _ensure_web_build(paths)
+    dependencies_changed = _ensure_web_dependencies(paths)
+    _ensure_web_build(paths, force=dependencies_changed)
 
 
 def _apply_migrations(paths: LocalPaths, environment: Mapping[str, str]) -> None:

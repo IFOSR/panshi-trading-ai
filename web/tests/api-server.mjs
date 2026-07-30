@@ -202,6 +202,10 @@ let extraHistoryCount = 0;
 const authSessions = new Map();
 let authSessionSequence = 0;
 
+const testSessionExpiresAt = () => (
+  new Date(Date.now() + 60 * 60 * 1000).toISOString()
+);
+
 const previousAnalysis = {
   analysis_id: "analysis-previous",
   created_at: "2026-07-28T08:00:00Z",
@@ -715,7 +719,7 @@ http.createServer(async (request, response) => {
     sendJson(response, {
       username: payload.username,
       session_token: token,
-      expires_at: "2026-07-30T00:00:00Z"
+      expires_at: testSessionExpiresAt()
     });
     return;
   }
@@ -727,7 +731,7 @@ http.createServer(async (request, response) => {
     }
     sendJson(response, {
       username: authSessions.get(token),
-      expires_at: "2026-07-30T00:00:00Z"
+      expires_at: testSessionExpiresAt()
     });
     return;
   }
