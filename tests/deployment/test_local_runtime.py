@@ -31,6 +31,7 @@ from trading_agent.local_runtime import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = (PROJECT_ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
+WEB_API = (PROJECT_ROOT / "web" / "lib" / "api.ts").read_text(encoding="utf-8")
 LOCAL_ENV_EXAMPLE = (PROJECT_ROOT / ".env.local.example").read_text(encoding="utf-8")
 PYPROJECT = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 GITIGNORE = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -512,6 +513,12 @@ def test_local_runtime_is_the_primary_documented_entrypoint() -> None:
     assert ".local/" in GITIGNORE
 
 
+def test_server_rendered_api_reads_reuse_the_loopback_proxy_boundary() -> None:
+    assert 'import { proxyConfiguration } from "./server-proxy";' in WEB_API
+    assert "return proxyConfiguration();" in WEB_API
+    assert "return baseUrl && apiToken ? { baseUrl, apiToken } : null;" not in WEB_API
+
+
 def test_runbook_documents_sqlite_user_authentication_operations() -> None:
     for required in (
         "panshi-user set-password",
@@ -526,6 +533,23 @@ def test_runbook_documents_sqlite_user_authentication_operations() -> None:
         assert required in RUNBOOK
     assert "Web 本地访问无需登录" not in RUNBOOK
     assert "TRADING_AGENT_USER_PASSWORD" not in RUNBOOK
+
+
+def test_runbook_documents_agent_selection_and_kimi_acp_requirements() -> None:
+    for required in (
+        "Codex",
+        "Kimi Code",
+        "gpt-5.6-sol",
+        "kimi-k3",
+        "Kimi 3",
+        "kimi-code/kimi-for-coding",
+        "image_in",
+        "ACP",
+        "不会静默回退",
+        "不升级或改写",
+    ):
+        assert required in RUNBOOK
+    assert "Kimi 仅作为失效关闭的备用路径" not in RUNBOOK
 
 
 def test_local_runtime_uses_web_port_8989_without_changing_api_port(
@@ -776,6 +800,78 @@ def test_doctor_requires_a_real_next_production_build(
     assert checks["web build"].ok is False
 
 
+def test_doctor_reports_each_agent_model_independently(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from trading_agent.agents.models import (
+        AgentBackendManifest,
+        AgentModelManifest,
+    )
+    from trading_agent.local_runtime import doctor_checks
+
+    paths = LocalPaths.from_root(tmp_path)
+    initialize_local_environment(
+        paths,
+        source_environment={"CODE_CLI_API_KEY": "test-key"},
+        token_factory=iter(("api", "privacy")).__next__,
+    )
+    capabilities = ["vision", "clarification", "conversation"]
+    monkeypatch.setattr(
+        "trading_agent.local_runtime.configured_agent_backend_manifests",
+        lambda **_: [
+            AgentBackendManifest(
+                backend_id="codex",
+                display_name="Codex",
+                default_model_id="gpt-5.6-sol",
+                capabilities=capabilities,
+                available=True,
+                models=[
+                    AgentModelManifest(
+                        model_id="gpt-5.6-sol",
+                        display_name="GPT-5.6",
+                        capabilities=capabilities,
+                        available=True,
+                    )
+                ],
+            ),
+            AgentBackendManifest(
+                backend_id="kimi",
+                display_name="Kimi Code",
+                default_model_id="kimi-k3",
+                capabilities=capabilities,
+                available=False,
+                unavailable_reason="Kimi 3 unavailable",
+                models=[
+                    AgentModelManifest(
+                        model_id="kimi-k3",
+                        display_name="Kimi 3",
+                        capabilities=capabilities,
+                        available=False,
+                        unavailable_reason="missing image_in",
+                    ),
+                    AgentModelManifest(
+                        model_id="kimi-code/kimi-for-coding",
+                        display_name="Kimi for Coding",
+                        capabilities=capabilities,
+                        available=False,
+                        unavailable_reason="missing image_in",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    checks = {item.name: item for item in doctor_checks(paths)}
+
+    assert checks["Agent Codex / GPT-5.6"].ok is True
+    assert checks["Agent Codex / GPT-5.6"].required is True
+    assert checks["Agent Kimi Code / Kimi 3"].ok is False
+    assert checks["Agent Kimi Code / Kimi 3"].required is False
+    assert checks["Agent Kimi Code / Kimi 3"].detail == "missing image_in"
+    assert "Agent Kimi Code / Kimi for Coding" in checks
+
+
 def test_playwright_uses_an_isolated_next_build_directory() -> None:
     config = (PROJECT_ROOT / "web" / "playwright.config.ts").read_text(
         encoding="utf-8"
@@ -793,7 +889,8 @@ def test_local_environment_template_disables_distributed_runtime() -> None:
     assert "TRADING_AGENT_ENVIRONMENT=local" in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_ENABLE_ORDER_EXECUTION=false" in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_PRIMARY_VISION_PROVIDER=codex" in LOCAL_ENV_EXAMPLE
-    assert "TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED=false" in LOCAL_ENV_EXAMPLE
+    assert "TRADING_AGENT_KIMI_MODEL=kimi-k3" in LOCAL_ENV_EXAMPLE
+    assert "TRADING_AGENT_FALLBACK_VISION_PROVIDER" not in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_WEB_USERNAME" not in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_WEB_PASSWORD" not in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_USER_PASSWORD" not in LOCAL_ENV_EXAMPLE

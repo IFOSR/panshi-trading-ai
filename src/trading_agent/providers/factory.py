@@ -1,11 +1,7 @@
 from trading_agent.config import Settings
 from trading_agent.providers.base import VisionProvider
 from trading_agent.providers.codex import CodexVisionProvider
-from trading_agent.providers.fallback import FallbackVisionProvider
-from trading_agent.providers.kimi import (
-    KimiVisionProvider,
-    trusted_external_isolation_checker,
-)
+from trading_agent.providers.kimi import KimiVisionProvider
 
 
 def configured_vision_provider(
@@ -35,27 +31,5 @@ def configured_vision_provider(
                 "vision evaluation model does not match production Kimi model: "
                 f"{model!r} != {configured_model!r}"
             )
-        return KimiVisionProvider(
-            model=configured_model,
-            isolation_checker=trusted_external_isolation_checker(
-                verified=resolved.kimi_external_isolation_verified,
-                provider=resolved.kimi_isolation_provider,
-            ),
-        )
+        return KimiVisionProvider(model=configured_model)
     raise ValueError(f"unsupported vision provider: {provider}")
-
-
-def configured_fallback_provider(
-    settings: Settings | None = None,
-) -> FallbackVisionProvider:
-    resolved = settings or Settings()
-    return FallbackVisionProvider(
-        primary=configured_vision_provider(
-            resolved.primary_vision_provider,
-            settings=resolved,
-        ),
-        fallback=configured_vision_provider(
-            resolved.fallback_vision_provider,
-            settings=resolved,
-        ),
-    )

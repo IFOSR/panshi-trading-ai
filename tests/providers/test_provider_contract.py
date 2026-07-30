@@ -10,7 +10,6 @@ from trading_agent.providers.base import ProviderUnavailable, VisionRequest
 from trading_agent.providers.codex import CodexVisionProvider
 from trading_agent.providers.codex import ScreenshotExtraction
 from trading_agent.providers.fallback import FallbackVisionProvider
-from trading_agent.providers import kimi
 from trading_agent.providers.kimi import KimiVisionProvider, configured_kimi_supports_images
 from trading_agent.vision.privacy import PrivacyAssessment
 from trading_agent.vision.prompts import prompt_sha256, resolve_prompt
@@ -55,6 +54,16 @@ def make_request() -> VisionRequest:
             safe_for_model=True,
         ),
     )
+
+
+class FakeAcpClient:
+    def __init__(self, output: str) -> None:
+        self.output = output
+        self.calls: list[tuple[str, list[Path]]] = []
+
+    def complete(self, prompt: str, *, image_paths=()) -> str:
+        self.calls.append((prompt, list(image_paths)))
+        return self.output
 
 
 def test_vision_request_requires_at_least_one_original_image() -> None:
@@ -232,24 +241,9 @@ def test_fallback_uses_kimi_only_when_codex_is_unavailable() -> None:
 
 
 def test_kimi_rejects_text_only_model_response() -> None:
-    def runner(
-        command: list[str],
-        timeout: float,
-        cwd: Path,
-        stdin: str,
-        env: dict[str, str],
-    ) -> CompletedProcess[str]:
-        return CompletedProcess(
-            command,
-            0,
-            stdout="当前模型不支持图像输入，无法读取和分析该图片。",
-            stderr="",
-        )
-
     provider = KimiVisionProvider(
-        runner=runner,
+        client=FakeAcpClient("当前模型不支持图像输入，无法读取和分析该图片。"),
         capability_checker=lambda: True,
-        isolation_checker=lambda: True,
     )
 
     with pytest.raises(ProviderUnavailable, match="image"):
@@ -357,7 +351,6 @@ def test_codex_runs_in_isolated_directory_with_rules_disabled(
 
 
 def test_kimi_hashes_the_exact_prompt_passed_to_the_cli() -> None:
-    captured: dict[str, object] = {}
     payload = {
         "image_role": "STATE_DAILY",
         "instrument": None,
@@ -379,34 +372,24 @@ def test_kimi_hashes_the_exact_prompt_passed_to_the_cli() -> None:
         "allowed_usage": "QUALITATIVE_ONLY",
     }
 
-    def runner(
-        command: list[str],
-        timeout: float,
-        cwd: Path,
-        stdin: str,
-        env: dict[str, str],
-    ) -> CompletedProcess[str]:
-        captured["prompt"] = command[command.index("-p") + 1]
-        return CompletedProcess(
-            command,
-            0,
-            stdout=json.dumps(payload),
-            stderr="",
-        )
+    client = FakeAcpClient(json.dumps(payload))
 
     evidence = KimiVisionProvider(
-        runner=runner,
+        model="kimi-k3",
+        client=client,
         capability_checker=lambda: True,
-        isolation_checker=lambda: True,
     ).analyze(
         make_request().model_copy(update={"user_context": "ignored metadata"})
     )
 
-    prompt = str(captured["prompt"])
+    prompt, image_paths = client.calls[0]
     assert evidence.prompt_sha256 == sha256(prompt.encode("utf-8")).hexdigest()
     assert "image-0.png" in prompt
     assert str(FIXTURE.resolve()) not in prompt
     assert "ignored metadata" not in prompt
+    assert image_paths == [FIXTURE]
+    assert evidence.provider == "kimi"
+    assert evidence.model == "kimi-k3"
 
 
 def test_codex_explicit_provider_works_without_machine_config(
@@ -557,41 +540,40 @@ def test_kimi_without_verified_image_capability_is_unavailable() -> None:
         provider.analyze(make_request())
 
 
-def test_kimi_requires_a_verified_tool_isolation_boundary() -> None:
-    provider = KimiVisionProvider(capability_checker=lambda: True)
-
-    with pytest.raises(ProviderUnavailable, match="isolation"):
-        provider.analyze(make_request())
-
-
-@pytest.mark.parametrize(
-    ("verified", "provider"),
-    [
-        (False, "docker-hardened-worker-v1"),
-        (True, None),
-        (True, ""),
-        (True, "kimi-cli"),
-    ],
-)
-def test_kimi_external_isolation_checker_fails_closed(
-    verified: bool,
-    provider: str | None,
-) -> None:
-    checker = kimi.trusted_external_isolation_checker(
-        verified=verified,
-        provider=provider,
+def test_kimi_uses_acp_local_isolation_without_docker_boundary() -> None:
+    client = FakeAcpClient(
+        json.dumps(
+            {
+                "image_role": "STATE_DAILY",
+                "instrument": None,
+                "contract": None,
+                "timeframe": "1d",
+                "cutoff_time": None,
+                "last_bar_closed": None,
+                "indicators": {
+                    "boll": None,
+                    "macd": None,
+                    "volume": None,
+                    "position_behavior": None,
+                    "notes": [],
+                },
+                "strategy_facts": unknown_strategy_facts(),
+                "strategy_fact_support": unknown_strategy_fact_support(),
+                "observations": [],
+                "blocking_issues": ["CONTRACT_MISSING"],
+                "allowed_usage": "QUALITATIVE_ONLY",
+            }
+        )
     )
 
-    assert checker() is False
+    evidence = KimiVisionProvider(
+        model="kimi-k3",
+        client=client,
+        capability_checker=lambda: True,
+    ).analyze(make_request())
 
-
-def test_kimi_external_isolation_checker_accepts_trusted_os_boundary() -> None:
-    checker = kimi.trusted_external_isolation_checker(
-        verified=True,
-        provider="docker-hardened-worker-v1",
-    )
-
-    assert checker() is True
+    assert evidence.provider == "kimi"
+    assert client.calls[0][1] == [FIXTURE]
 
 
 def test_kimi_capability_check_is_bound_to_the_selected_default_model(

@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from trading_agent.config import Settings
 from trading_agent.domain.enums import PositionDirection
 from trading_agent.domain.evidence import ScreenshotEvidence
 from trading_agent.security.audit import build_analysis_audit
@@ -21,6 +22,11 @@ def build_analysis_payload(
     previous_analysis: dict[str, Any] | None,
     workflow: AnalysisWorkflow,
 ) -> dict[str, Any]:
+    default_agent_backend = {
+        "backend_id": "codex",
+        "model_id": Settings().codex_model,
+        "display_name": "Codex",
+    }
     raw_position = cast_mapping(case_state.get("position")).get(
         "direction",
         PositionDirection.UNKNOWN.value,
@@ -62,16 +68,22 @@ def build_analysis_payload(
         ),
     )
     primary = primary_evidence(evidence_set)
+    case_snapshot = {
+        "contract": case_state.get("contract"),
+        "position": dict(cast_mapping(case_state.get("position"))),
+        "risk": dict(cast_mapping(case_state.get("risk"))),
+        "strategy": dict(cast_mapping(case_state.get("strategy"))),
+    }
+    agent_backend = (
+        dict(cast_mapping(case_state.get("agent_backend")))
+        or default_agent_backend
+    )
+    case_snapshot["agent_backend"] = agent_backend
     payload: dict[str, Any] = {
         "analysis_id": analysis_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input_snapshot": {
-            "case": {
-                "contract": case_state.get("contract"),
-                "position": dict(cast_mapping(case_state.get("position"))),
-                "risk": dict(cast_mapping(case_state.get("risk"))),
-                "strategy": dict(cast_mapping(case_state.get("strategy"))),
-            },
+            "case": case_snapshot,
             "strategy_input": {
                 "facts": context.model_dump(mode="json"),
                 "position": context.position.value,
@@ -86,6 +98,7 @@ def build_analysis_payload(
         "evidence": primary.model_dump(mode="json"),
         "evidence_set": serialized_evidence,
         "strategy_manifest": result.strategy_manifest.model_dump(mode="json"),
+        "agent_backend": agent_backend,
         "audit": build_analysis_audit(
             list(evidence_set),
             result.evaluation.steps,

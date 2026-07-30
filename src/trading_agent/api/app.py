@@ -20,6 +20,12 @@ from sqlalchemy.exc import IntegrityError
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
 
+from trading_agent.agents.factory import configured_agent_backend_registry
+from trading_agent.agents.models import AgentRuntime
+from trading_agent.agents.registry import (
+    AgentBackendRegistry,
+    AgentBackendUnavailable,
+)
 from trading_agent.config import Settings
 from trading_agent.auth.service import AuthService, InvalidCredentials, InvalidSession
 from trading_agent.conversation.models import ConversationReply
@@ -42,8 +48,6 @@ from trading_agent.providers.base import (
     ProviderUnavailable,
     VisionProvider,
 )
-from trading_agent.providers.clarification import CodexClarificationProvider
-from trading_agent.providers.conversation import CodexConversationProvider
 from trading_agent.services.analysis import build_analysis_payload
 from trading_agent.services.clarification import ClarificationService
 from trading_agent.services.evidence_pipeline import extract_case_evidence
@@ -53,7 +57,7 @@ from trading_agent.vision.image_quality import (
     validate_original_image_content,
 )
 from trading_agent.vision.privacy import assess_upload_privacy
-from trading_agent.workflows.activities import AnalysisCommand, _provider
+from trading_agent.workflows.activities import AnalysisCommand
 from trading_agent.workflows.analysis import AnalysisWorkflow
 from trading_agent.workflows.worker import DurableAnalysisWorkflow, TASK_QUEUE
 from trading_agent.strategies.registry import (
@@ -335,6 +339,8 @@ class CreateCaseRequest(BaseModel):
     )
     strategy_id: str | None = None
     strategy_version: str | None = None
+    agent_backend_id: str | None = None
+    agent_model_id: str | None = None
 
 
 class PositionRequest(BaseModel):
@@ -375,6 +381,11 @@ class StrategySelectionRequest(BaseModel):
     version: str | None = None
 
 
+class AgentBackendSelectionRequest(BaseModel):
+    backend_id: str
+    model_id: str | None = None
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=1000)
@@ -386,13 +397,13 @@ LEGACY_STRATEGY_SUMMARY = {
     "display_name": "结构确认策略",
 }
 
-
 def create_app(
     database_url: str | None = None,
     storage_root: Path | None = None,
     vision_provider: VisionProvider | None = None,
     clarification_provider: ClarificationProvider | None = None,
     conversation_provider: ConversationProvider | None = None,
+    agent_backend_registry: AgentBackendRegistry | None = None,
     strategy_registry: StrategyRegistry | None = None,
     market_data_resolver: MarketDataResolver | None = None,
     temporal_executor: TemporalExecutor | None = None,
@@ -421,27 +432,38 @@ def create_app(
         with sessions() as session:
             existing_case_ids = set(CaseRepository(session).case_ids())
         _recover_quarantined_images(image_root, existing_case_ids)
-    provider = _provider(vision_provider)
     settings = Settings()
-    clarification_service = ClarificationService(
-        clarification_provider
-        or CodexClarificationProvider(
-            model=settings.codex_model,
-            model_provider=settings.codex_model_provider,
-            provider_base_url=settings.codex_provider_base_url,
-            provider_env_key=settings.codex_provider_env_key,
-        ),
-        workflow=workflow,
-    )
-    conversation_service = ConversationService(
-        conversation_provider
-        or CodexConversationProvider(
-            model=settings.codex_model,
-            model_provider=settings.codex_model_provider,
-            provider_base_url=settings.codex_provider_base_url,
-            provider_env_key=settings.codex_provider_env_key,
+    configured_registry = configured_agent_backend_registry(settings)
+    if agent_backend_registry is not None:
+        agents = agent_backend_registry
+    elif any(
+        item is not None
+        for item in (
+            vision_provider,
+            clarification_provider,
+            conversation_provider,
         )
-    )
+    ):
+        configured_manifests = configured_registry.manifests()
+
+        def injected_runtime(backend_id: str, model_id: str) -> AgentRuntime:
+            runtime = configured_registry.resolve(backend_id, model_id)
+            if backend_id != "codex":
+                return runtime
+            return AgentRuntime(
+                backend_id=backend_id,
+                model_id=model_id,
+                vision=vision_provider or runtime.vision,
+                clarification=clarification_provider or runtime.clarification,
+                conversation=conversation_provider or runtime.conversation,
+            )
+
+        agents = AgentBackendRegistry(
+            manifests=configured_manifests,
+            runtime_factory=injected_runtime,
+        )
+    else:
+        agents = configured_registry
     resolver = market_data_resolver or configured_market_data_resolver()
     trusted_privacy_review_token = (
         privacy_review_token or os.getenv("TRADING_AGENT_PRIVACY_REVIEW_TOKEN")
@@ -467,10 +489,12 @@ def create_app(
     app.state.image_root = image_root
     app.state.case_mutations = case_mutations
     app.state.deletion_cleanup = deletion_cleanup
-    app.state.vision_provider = provider
+    default_runtime = agents.resolve("codex", settings.codex_model)
+    app.state.vision_provider = default_runtime.vision
     app.state.market_data_resolver = resolver
-    app.state.clarification_provider = clarification_service.provider
-    app.state.conversation_provider = conversation_service.provider
+    app.state.clarification_provider = default_runtime.clarification
+    app.state.conversation_provider = default_runtime.conversation
+    app.state.agent_backend_registry = agents
     app.state.strategy_registry = registry
     resolved_environment = (
         environment
@@ -519,6 +543,58 @@ def create_app(
             "strategy": dict(LEGACY_STRATEGY_SUMMARY),
         }
 
+    def default_agent_backend_summary() -> dict[str, str]:
+        backend = agents.manifest("codex")
+        return {
+            "backend_id": backend.backend_id,
+            "model_id": backend.default_model_id,
+            "display_name": backend.display_name,
+        }
+
+    def project_case_agent_backend(state: dict) -> dict:
+        if state.get("agent_backend"):
+            return state
+        return {
+            **state,
+            "agent_backend": default_agent_backend_summary(),
+        }
+
+    def project_case(state: dict) -> dict:
+        return project_case_agent_backend(project_case_strategy(state))
+
+    def resolve_agent_runtime(
+        backend_id: str | None,
+        model_id: str | None,
+    ) -> tuple[AgentRuntime, dict[str, str]]:
+        selected_backend_id = backend_id or "codex"
+        try:
+            runtime = agents.resolve(selected_backend_id, model_id)
+            backend = agents.manifest(runtime.backend_id)
+        except AgentBackendUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return runtime, {
+            "backend_id": runtime.backend_id,
+            "model_id": runtime.model_id,
+            "display_name": backend.display_name,
+        }
+
+    def resolve_case_runtime(
+        state: dict,
+    ) -> tuple[AgentRuntime, dict[str, str]]:
+        selected = state.get("agent_backend")
+        if not isinstance(selected, dict):
+            selected = default_agent_backend_summary()
+        return resolve_agent_runtime(
+            str(selected.get("backend_id") or "codex"),
+            (
+                str(selected["model_id"])
+                if selected.get("model_id")
+                else None
+            ),
+        )
+
     @app.post("/v1/auth/login")
     def login(request: LoginRequest) -> dict:
         with sessions() as session:
@@ -564,6 +640,13 @@ def create_app(
             if manifest.status != "disabled"
         ]
 
+    @app.get("/v1/agent-backends")
+    def list_agent_backends() -> list[dict]:
+        return [
+            manifest.model_dump(mode="json")
+            for manifest in agents.manifests()
+        ]
+
     @app.get("/v1/cases")
     def list_cases() -> list[dict]:
         with sessions() as session:
@@ -573,6 +656,10 @@ def create_app(
                 **item,
                 "strategy": (
                     item.get("strategy") or dict(LEGACY_STRATEGY_SUMMARY)
+                ),
+                "agent_backend": (
+                    item.get("agent_backend")
+                    or default_agent_backend_summary()
                 ),
             }
             for item in cases
@@ -612,20 +699,6 @@ def create_app(
         request: CreateCaseRequest,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> dict:
-        parsed = parse_user_message(request.message) if request.message else None
-        try:
-            selected_strategy = (
-                registry.resolve(request.strategy_id, request.strategy_version)
-                if request.strategy_id
-                else registry.default()
-            )
-        except StrategyNotFound as exc:
-            raise HTTPException(400, f"strategy not found: {exc}") from exc
-        contract = request.contract or (parsed.get("contract") if parsed else None)
-        position = parsed.get("position") if parsed else None
-        risk = parsed.get("risk") if parsed else None
-        if risk:
-            risk = {key: value for key, value in risk.items() if value is not None}
         request_sha256 = sha256(
             json.dumps(
                 request.model_dump(mode="json"),
@@ -647,6 +720,31 @@ def create_app(
                 raise HTTPException(409, "idempotency key payload mismatch")
             return state
 
+        if deterministic_case_id:
+            with sessions() as session:
+                replayed = replay_or_conflict(
+                    CaseRepository(session).get_case(deterministic_case_id)
+                )
+            if replayed is not None:
+                return replayed
+        parsed = parse_user_message(request.message) if request.message else None
+        try:
+            selected_strategy = (
+                registry.resolve(request.strategy_id, request.strategy_version)
+                if request.strategy_id
+                else registry.default()
+            )
+        except StrategyNotFound as exc:
+            raise HTTPException(400, f"strategy not found: {exc}") from exc
+        _, selected_agent_backend = resolve_agent_runtime(
+            request.agent_backend_id,
+            request.agent_model_id,
+        )
+        contract = request.contract or (parsed.get("contract") if parsed else None)
+        position = parsed.get("position") if parsed else None
+        risk = parsed.get("risk") if parsed else None
+        if risk:
+            risk = {key: value for key, value in risk.items() if value is not None}
         with case_mutations.locked():
             with sessions() as session:
                 with session.begin():
@@ -678,6 +776,7 @@ def create_app(
                                         selected_strategy.manifest.display_name
                                     ),
                                 },
+                                agent_backend=selected_agent_backend,
                             )
                     except IntegrityError:
                         replayed = replay_or_conflict(
@@ -693,7 +792,7 @@ def create_app(
             state = CaseRepository(session).get_case(case_id)
             if state is None:
                 raise HTTPException(404, "case not found")
-            return project_case_strategy(state)
+            return project_case(state)
 
     @app.delete("/v1/cases/{case_id}")
     def delete_case(case_id: str) -> dict[str, int]:
@@ -747,11 +846,156 @@ def create_app(
             "strategy": (
                 state.get("strategy") or dict(LEGACY_STRATEGY_SUMMARY)
             ),
+            "agent_backend": (
+                state.get("agent_backend")
+                or default_agent_backend_summary()
+            ),
             "messages": state.get("messages", []),
             "current_analysis_id": (
                 analyses[-1]["analysis_id"] if analyses else None
             ),
         }
+
+    @app.post("/v1/cases/{case_id}/agent-backend")
+    async def select_agent_backend(
+        case_id: str,
+        request: AgentBackendSelectionRequest,
+        idempotency_key: str | None = Header(
+            default=None,
+            alias="Idempotency-Key",
+        ),
+    ) -> dict:
+        key = require_key(idempotency_key)
+        _, selected = resolve_agent_runtime(
+            request.backend_id,
+            request.model_id,
+        )
+        owner_id = str(uuid4())
+        command = (
+            "agent-backend-select:"
+            f"{selected['backend_id']}:{selected['model_id']}"
+        )
+        try:
+            with sessions() as session:
+                with session.begin():
+                    repo = CaseRepository(session)
+                    state = repo.get_case(case_id)
+                    if state is None:
+                        raise HTTPException(404, "case not found")
+                    try:
+                        cached = repo.claim_idempotency(
+                            case_id,
+                            command,
+                            key,
+                            owner_id,
+                        )
+                    except CommandInProgress as exc:
+                        raise command_in_progress(exc) from exc
+                    if cached:
+                        return cached
+                    has_images = bool(state.get("images"))
+            analysis_id = None
+            staged_analysis: dict | None = None
+            loaded_case_version: int | None = None
+            if has_images:
+                analysis_key = (
+                    "agent-switch-analysis-"
+                    + sha256(
+                        (
+                            f"{key}:{selected['backend_id']}:"
+                            f"{selected['model_id']}"
+                        ).encode("utf-8")
+                    ).hexdigest()
+                )
+                with _IdempotencyHeartbeat(
+                    sessions=sessions,
+                    case_id=case_id,
+                    command=command,
+                    key=key,
+                    owner_id=owner_id,
+                ):
+                    staged_analysis, loaded_case_version = (
+                        await _prepare_agent_switch_analysis(
+                        case_id,
+                        analysis_key,
+                        refresh_vision=True,
+                        agent_backend_override=selected,
+                    )
+                    )
+                analysis_id = staged_analysis["analysis_id"]
+            with sessions() as session:
+                with session.begin():
+                    repo = CaseRepository(session)
+                    state = repo.get_case(case_id)
+                    if state is None:
+                        raise HTTPException(404, "case not found")
+                    if not repo.renew_idempotency(
+                        case_id,
+                        command,
+                        key,
+                        owner_id,
+                    ):
+                        raise CommandInProgress(f"{command}:{key}")
+                    if staged_analysis is not None:
+                        repo.save_analysis(
+                            case_id,
+                            staged_analysis,
+                            expected_case_version=loaded_case_version,
+                        )
+                        state = repo.get_case(case_id)
+                        if state is None:
+                            raise HTTPException(404, "case not found")
+                    payload = {
+                        "agent_backend": selected,
+                        "message": {
+                            "message_id": str(uuid4()),
+                            "role": "system",
+                            "message_type": "AGENT_BACKEND_CHANGE",
+                            "content": (
+                                f"已切换至{selected['display_name']} "
+                                f"({selected['model_id']})"
+                            ),
+                            "created_at": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                            "analysis_id": analysis_id,
+                            "metadata": dict(selected),
+                        },
+                    }
+                    state = repo._apply_event(
+                        state,
+                        "AGENT_BACKEND_SELECTED",
+                        payload,
+                    )
+                    repo.update_case(
+                        case_id,
+                        state,
+                        "AGENT_BACKEND_SELECTED",
+                        payload,
+                    )
+                    result = {**selected, "analysis_id": analysis_id}
+                    repo.complete_idempotency(
+                        case_id,
+                        command,
+                        key,
+                        owner_id,
+                        result,
+                    )
+                    return result
+        except Exception as exc:
+            with sessions() as session:
+                with session.begin():
+                    CaseRepository(session).fail_idempotency(
+                        case_id,
+                        command,
+                        key,
+                        owner_id,
+                    )
+            if isinstance(exc, ProviderResponseError):
+                raise HTTPException(502, str(exc)) from exc
+            if isinstance(exc, ProviderUnavailable):
+                raise HTTPException(503, str(exc)) from exc
+            raise
 
     @app.post("/v1/cases/{case_id}/strategy")
     async def select_strategy(
@@ -908,6 +1152,7 @@ def create_app(
                 if not analyses:
                     raise HTTPException(409, "analysis is required before follow-up")
                 latest = analyses[-1]
+                runtime, _ = resolve_case_runtime(state)
                 try:
                     cached = repo.claim_idempotency(
                         case_id,
@@ -920,7 +1165,7 @@ def create_app(
                 if cached:
                     return ConversationReply.model_validate(cached)
         try:
-            reply = conversation_service.reply(
+            reply = ConversationService(runtime.conversation).reply(
                 case_id=case_id,
                 analysis=latest,
                 message=request.message,
@@ -1245,11 +1490,74 @@ def create_app(
             raise HTTPException(404, "image not found")
         return FileResponse(path)
 
-    @app.post("/v1/cases/{case_id}/analysis")
-    async def analyze(
+    async def _prepare_agent_switch_analysis(
         case_id: str,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-        refresh_vision: bool = False,
+        idempotency_key: str,
+        *,
+        refresh_vision: bool,
+        agent_backend_override: dict[str, str],
+    ) -> tuple[dict, int]:
+        analysis_id = str(uuid4())
+        with sessions() as session:
+            repo = CaseRepository(session)
+            state = repo.get_case(case_id)
+            if state is None:
+                raise HTTPException(404, "case not found")
+            state = project_case_agent_backend(state)
+            images = state.get("images", [])
+            if not images:
+                raise HTTPException(400, "analysis requires at least one image")
+            state = {
+                **state,
+                "agent_backend": dict(agent_backend_override),
+            }
+            previous_analyses = repo.analyses(case_id)
+            previous_analysis = previous_analyses[-1] if previous_analyses else None
+            loaded_case_version = repo.case_version(case_id)
+        if temporal_executor is not None:
+            staged = await temporal_executor(
+                AnalysisCommand(
+                    case_id=case_id,
+                    idempotency_key=idempotency_key,
+                    storage_root=str(image_root.resolve()),
+                    analysis_id=analysis_id,
+                    refresh_vision=refresh_vision,
+                    persist_result=False,
+                    case_state=state,
+                    case_version=loaded_case_version,
+                    previous_analysis=previous_analysis,
+                )
+            )
+            return dict(staged), loaded_case_version
+        evidence_set = extract_case_evidence(
+            case_state=state,
+            images=images,
+            provider=resolve_case_runtime(state)[0].vision,
+            market_data_resolver=resolver,
+            storage_root=image_root,
+            previous_evidence_set=(
+                previous_analysis.get("evidence_set", [])
+                if previous_analysis and not refresh_vision
+                else []
+            ),
+        )
+        payload = build_analysis_payload(
+            analysis_id=analysis_id,
+            case_id=case_id,
+            idempotency_key=idempotency_key,
+            case_state=state,
+            evidence_set=evidence_set,
+            previous_analysis=previous_analysis,
+            workflow=workflow,
+        )
+        return payload, loaded_case_version
+
+    async def _analyze_case(
+        case_id: str,
+        idempotency_key: str,
+        *,
+        refresh_vision: bool,
+        agent_backend_override: dict[str, str] | None = None,
     ) -> dict:
         key = require_key(idempotency_key)
         if temporal_executor is not None:
@@ -1261,8 +1569,14 @@ def create_app(
                 state = repo.get_case(case_id)
                 if state is None:
                     raise HTTPException(404, "case not found")
+                state = project_case_agent_backend(state)
                 if not state.get("images"):
                     raise HTTPException(400, "analysis requires at least one image")
+                if agent_backend_override is not None:
+                    state = {
+                        **state,
+                        "agent_backend": dict(agent_backend_override),
+                    }
                 previous_analyses = repo.analyses(case_id)
                 previous_analysis = (
                     previous_analyses[-1] if previous_analyses else None
@@ -1286,9 +1600,15 @@ def create_app(
                 state = repo.get_case(case_id)
                 if state is None:
                     raise HTTPException(404, "case not found")
+                state = project_case_agent_backend(state)
                 images = state.get("images", [])
                 if not images:
                     raise HTTPException(400, "analysis requires at least one image")
+                if agent_backend_override is not None:
+                    state = {
+                        **state,
+                        "agent_backend": dict(agent_backend_override),
+                    }
                 try:
                     cached = repo.claim_idempotency(
                         case_id, "analysis", key, analysis_id
@@ -1320,7 +1640,7 @@ def create_app(
                 evidence_set = extract_case_evidence(
                     case_state=state,
                     images=images,
-                    provider=provider,
+                    provider=resolve_case_runtime(state)[0].vision,
                     market_data_resolver=resolver,
                     storage_root=image_root,
                     previous_evidence_set=(
@@ -1369,6 +1689,21 @@ def create_app(
                 raise HTTPException(503, str(exc)) from exc
             raise
 
+    @app.post("/v1/cases/{case_id}/analysis")
+    async def analyze(
+        case_id: str,
+        idempotency_key: str | None = Header(
+            default=None,
+            alias="Idempotency-Key",
+        ),
+        refresh_vision: bool = False,
+    ) -> dict:
+        return await _analyze_case(
+            case_id,
+            require_key(idempotency_key),
+            refresh_vision=refresh_vision,
+        )
+
     @app.get("/v1/cases/{case_id}/clarifications")
     def get_clarifications(case_id: str) -> dict:
         with sessions() as session:
@@ -1378,6 +1713,10 @@ def create_app(
                 raise HTTPException(404, "case not found")
             analyses = repo.analyses(case_id)
         latest = analyses[-1] if analyses else None
+        clarification_service = ClarificationService(
+            resolve_case_runtime(state)[0].clarification,
+            workflow=workflow,
+        )
         return {
             "source_analysis_id": latest["analysis_id"] if latest else None,
             "questions": [
@@ -1408,6 +1747,10 @@ def create_app(
                 if not analyses:
                     raise HTTPException(409, "analysis is required before clarification")
                 latest = analyses[-1]
+                clarification_service = ClarificationService(
+                    resolve_case_runtime(state)[0].clarification,
+                    workflow=workflow,
+                )
                 try:
                     cached = repo.claim_idempotency(
                         case_id,
@@ -1571,6 +1914,10 @@ def create_app(
                 if not analyses:
                     raise HTTPException(409, "analysis is required before confirmation")
                 latest = analyses[-1]
+                clarification_service = ClarificationService(
+                    resolve_case_runtime(state)[0].clarification,
+                    workflow=workflow,
+                )
                 if proposal.get("source_analysis_id") != latest["analysis_id"]:
                     raise HTTPException(
                         409,

@@ -19,6 +19,8 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 from urllib.parse import urlsplit
 
+from trading_agent.agents.registry import configured_agent_backend_manifests
+
 
 API_HOST = "127.0.0.1"
 API_PORT = 8000
@@ -44,14 +46,11 @@ LOCAL_NON_SECRET_DEFAULTS = {
     "TRADING_AGENT_ENVIRONMENT": "local",
     "TRADING_AGENT_ENABLE_ORDER_EXECUTION": "false",
     "TRADING_AGENT_PRIMARY_VISION_PROVIDER": "codex",
-    "TRADING_AGENT_FALLBACK_VISION_PROVIDER": "kimi",
     "TRADING_AGENT_CODEX_MODEL": "gpt-5.6-sol",
     "TRADING_AGENT_CODEX_MODEL_PROVIDER": "code-cli",
     "TRADING_AGENT_CODEX_PROVIDER_BASE_URL": "https://www.code-cli.cn/v1",
     "TRADING_AGENT_CODEX_PROVIDER_ENV_KEY": "CODE_CLI_API_KEY",
-    "TRADING_AGENT_KIMI_MODEL": "default",
-    "TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED": "false",
-    "TRADING_AGENT_KIMI_ISOLATION_PROVIDER": "",
+    "TRADING_AGENT_KIMI_MODEL": "kimi-k3",
     "TRADING_AGENT_MARKET_DATA_PROVIDER": "free",
     "TRADING_AGENT_MARKET_DATA_HISTORY_LENGTH": "240",
     "TRADING_AGENT_MARKET_DATA_TIMEOUT_SECONDS": "10",
@@ -732,13 +731,26 @@ def doctor_checks(paths: LocalPaths) -> list[CheckResult]:
             current_status["web"][0] or _port_available(WEB_HOST, WEB_PORT),
             "running locally" if current_status["web"][0] else "available",
         ),
-        CheckResult(
-            "Kimi fallback",
-            values.get("TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED") != "true",
-            "disabled by default; Codex is primary",
-            required=False,
-        ),
     ]
+    for backend in configured_agent_backend_manifests(
+        codex_model=values.get(
+            "TRADING_AGENT_CODEX_MODEL",
+            "gpt-5.6-sol",
+        )
+    ):
+        for model in backend.models:
+            checks.append(
+                CheckResult(
+                    f"Agent {backend.display_name} / {model.display_name}",
+                    model.available,
+                    (
+                        "available"
+                        if model.available
+                        else model.unavailable_reason or "unavailable"
+                    ),
+                    required=backend.backend_id == "codex",
+                )
+            )
     provider_env_key = values.get("TRADING_AGENT_CODEX_PROVIDER_ENV_KEY")
     if provider_env_key:
         checks.append(

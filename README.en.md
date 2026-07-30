@@ -10,7 +10,7 @@ Panshi Trading AI is a desktop analysis and decision-support system. In a
 continuous conversation, a user can submit a question and complete market
 screenshots. The system performs:
 
-- direct Codex multimodal analysis of the original image;
+- selectable Codex or Kimi Code multimodal analysis of the original image;
 - public market-data enrichment through TqSdk and AkShare;
 - data consistency and validity checks;
 - versioned deterministic strategy evaluation;
@@ -31,11 +31,17 @@ logic, independent risk controls, and an inspectable user experience.
 
 ### Direct original-image understanding
 
-The runtime sends the complete user screenshot directly to the Codex
-multimodal model. OpenCV, image slicing, local OCR, and coordinate
+The runtime sends the complete user screenshot directly to the Codex or Kimi
+Code model selected for the case. OpenCV, image slicing, local OCR, and coordinate
 reconstruction are not used as substitutes in the production evidence path.
 Contract, timeframe, candles, indicators, and surrounding UI context remain
-available to the model.
+available to the model. Codex defaults to `gpt-5.6-sol`; Kimi Code defaults to
+`kimi-k3`, displayed as `Kimi 3`.
+
+The Agent and model are pinned to the case and are used consistently for
+vision, clarification, and follow-up answers. The system does not silently
+fall back to another Agent. It reports the unavailable reason and requires an
+explicit user switch.
 
 ### Automatic public-data enrichment
 
@@ -74,7 +80,8 @@ flowchart TD
 
     DB[(SQLite<br/>Users, sessions, cases, analysis versions)]
     IMG[(Original image storage<br/>.local/data/images)]
-    V[Codex multimodal model<br/>Direct original-image reading]
+    G[Agent Registry<br/>Codex / Kimi Code + model]
+    V[Selected multimodal Agent<br/>Direct original-image reading]
     M[Free market data<br/>TqSdk primary / AkShare fallback]
     E[Evidence merge and validity<br/>Sources, conflicts, confidence, freshness]
     R[Strategy Registry]
@@ -86,7 +93,8 @@ flowchart TD
     W --> A
     A --> DB
     A --> IMG
-    A --> V
+    A --> G
+    G --> V
     A --> M
     V --> E
     M --> E
@@ -105,7 +113,8 @@ flowchart TD
 | Next.js Web | SQLite login, continuous conversation, screenshot attachments, strategy selection, and history |
 | FastAPI | API authentication, original-image storage, case state, orchestration, and session management |
 | SQLite | Password hashes, session digests, case events, and analysis versions |
-| Codex | Reads original images and emits structured observations, visible text, confidence, and uncertainty |
+| Agent Registry | Lists Codex, Kimi Code, and model capabilities and pins the selection to each case |
+| Codex / Kimi Code | Reads original images and emits structured observations, visible text, confidence, and uncertainty |
 | TqSdk / AkShare | China-futures public data; TqSdk is optional and AkShare is the automatic fallback |
 | Evidence layer | Merges screenshots and structured data and detects conflicts, missing fields, close status, and quality |
 | Strategy Registry | Discovers, selects, and pins strategy plugin versions |
@@ -117,7 +126,8 @@ flowchart TD
 
 ```text
 User question and complete original screenshots
-  -> direct Codex multimodal extraction
+  -> select Codex or Kimi Code and a model
+  -> direct multimodal extraction through the selected Agent
   -> TqSdk / AkShare public-market enrichment
   -> evidence merge, provenance, and data-validity evaluation
   -> select and pin strategy ID and version
@@ -135,7 +145,7 @@ The recommended path is the Docker-free local lightweight runtime:
 Browser -> Next.js :8989 -> FastAPI :8000
                               |-> SQLite
                               |-> original-image directory
-                              |-> Codex CLI
+                              |-> Codex CLI / Kimi Code ACP
                               `-> inline strategy analysis
 ```
 
@@ -151,6 +161,7 @@ Temporal, a separate worker, and an OTel Collector are not required.
 - Node.js 20 or newer;
 - npm and Git;
 - an executable Codex CLI;
+- an optional Kimi Code CLI;
 - a model-provider API key available through an environment variable;
 - free local ports `8000` and `8989`.
 
@@ -162,6 +173,7 @@ node --version
 npm --version
 git --version
 codex --version
+kimi --version
 ```
 
 ### 2. Clone the repository
@@ -180,7 +192,7 @@ gh repo clone IFOSR/panshi-trading-ai
 cd panshi-trading-ai
 ```
 
-### 3. Configure Codex credentials
+### 3. Configure Agents and models
 
 Codex is the primary multimodal provider. Initialization reads
 `CODE_CLI_API_KEY` from the current shell:
@@ -202,6 +214,27 @@ TRADING_AGENT_CODEX_PROVIDER_ENV_KEY=CODE_CLI_API_KEY
 CODE_CLI_API_KEY=<your-code-cli-api-key>
 ```
 
+Codex defaults to `gpt-5.6-sol`. Kimi Code is optional. The application does
+not install, upgrade, or rewrite Kimi Code and never modifies
+`~/.kimi-code/config.toml`. To enable Kimi, first verify the existing install:
+
+```sh
+kimi --version
+kimi doctor
+```
+
+Kimi Code must expose the `kimi-k3` alias with `image_in` in that model's
+capabilities. The UI displays it as `Kimi 3`. It also lists
+`kimi-code/kimi-for-coding`, but that alias is enabled for screenshot analysis
+only when it also declares `image_in`. The model must also pass ACP
+initialization and session creation so the existing authentication is
+verified. A missing CLI, alias, image capability, or ACP authentication leaves
+the model visible but disabled with an exact reason.
+
+Kimi runs through `kimi -m <model> acp`. Original image bytes are sent as ACP
+image blocks and every tool permission request is denied. The application
+only reads the existing Kimi login and model configuration and does not upgrade or rewrite Kimi Code.
+
 ### 4. Initialize
 
 Run from the repository root:
@@ -212,8 +245,9 @@ Run from the repository root:
 ```
 
 `init` creates the Python environment, installs dependencies, builds the Web
-application, generates local settings, initializes SQLite, and checks Codex
-and market-data dependencies. Important local paths are:
+application, generates local settings, initializes SQLite, and checks Agent,
+model, and market-data dependencies. Codex is required; Kimi Code is optional
+and does not block startup when unconfigured. Important local paths are:
 
 ```text
 .local/env                         private runtime configuration and secrets
@@ -309,10 +343,10 @@ Check runtime status:
 ## User workflow
 
 1. Sign in with a SQLite account.
-2. Select a strategy and enter an analysis question.
+2. Select a strategy, Agent, and model, then enter an analysis question.
 3. Attach one or two complete screenshots containing the contract, timeframe,
    and full chart context.
-4. The system sends the originals to Codex and enriches public market data.
+4. The system sends the originals to the selected Agent and enriches public market data.
 5. The conversation displays data validity, strategy milestones, risk
    constraints, and the final action.
 6. Ask follow-up questions about the conclusion, rules, evidence, or risk.
@@ -374,6 +408,20 @@ codex --version
 Confirm that the current shell contains the provider credential and inspect
 the model-provider fields in `.local/env`.
 
+### Kimi Code or Kimi 3 is unavailable
+
+```sh
+kimi --version
+kimi doctor
+./bin/trading-agent-local doctor
+```
+
+Confirm that `~/.kimi-code/config.toml` contains `kimi-k3` and that its
+capabilities include `image_in`. `kimi-code/kimi-for-coding` also requires
+`image_in` before it can be selected. The application does not upgrade or
+rewrite Kimi Code and does not silently fall back to Codex. Continue with
+Codex or explicitly switch after repairing the Kimi configuration.
+
 ### The Web UI is unavailable
 
 ```sh
@@ -415,7 +463,7 @@ python3 -m venv .venv
 pip install -e '.[dev]'
 pytest -q
 ruff check .
-mypy
+mypy src/trading_agent
 ```
 
 Frontend:

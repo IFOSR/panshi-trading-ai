@@ -7,6 +7,9 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 from temporalio import activity
 
+from trading_agent.agents.factory import configured_agent_backend_registry
+from trading_agent.agents.registry import AgentBackendRegistry
+from trading_agent.config import Settings
 from trading_agent.db.base import build_engine, session_factory
 from trading_agent.db.repositories import (
     CaseRepository,
@@ -16,7 +19,6 @@ from trading_agent.db.repositories import (
 from trading_agent.domain.evidence import ScreenshotEvidence
 from trading_agent.market.resolver import MarketDataResolver, NullMarketDataResolver
 from trading_agent.providers.base import VisionProvider
-from trading_agent.providers.factory import configured_fallback_provider
 from trading_agent.services.analysis import build_analysis_payload
 from trading_agent.services.evidence_pipeline import (
     extract_original_images,
@@ -35,6 +37,7 @@ class AnalysisCommand(BaseModel):
     storage_root: str
     analysis_id: str = Field(default_factory=lambda: str(uuid4()))
     refresh_vision: bool = False
+    persist_result: bool = True
     case_state: dict[str, Any] | None = None
     case_version: int | None = None
     previous_analysis: dict[str, Any] | None = None
@@ -48,10 +51,30 @@ def _database_url(database_url: str | None = None) -> str:
     )
 
 
-def _provider(provider: VisionProvider | None = None) -> VisionProvider:
+def _provider(
+    case_state: dict[str, Any],
+    provider: VisionProvider | None = None,
+    agent_backend_registry: AgentBackendRegistry | None = None,
+) -> VisionProvider:
     if provider is not None:
         return provider
-    return configured_fallback_provider()
+    registry = (
+        agent_backend_registry
+        or configured_agent_backend_registry(Settings())
+    )
+    selected = case_state.get("agent_backend")
+    if not isinstance(selected, dict):
+        selected = {
+            "backend_id": "codex",
+            "model_id": Settings().codex_model,
+        }
+    backend_id = str(selected.get("backend_id") or "codex")
+    model_id = (
+        str(selected["model_id"])
+        if selected.get("model_id")
+        else None
+    )
+    return registry.resolve(backend_id, model_id).vision
 
 
 def load_analysis_stage(
@@ -64,16 +87,17 @@ def load_analysis_stage(
     with sessions() as session:
         with session.begin():
             repo = CaseRepository(session)
-            cached = repo.idempotent_result(
-                command.case_id,
-                "analysis",
-                command.idempotency_key,
-            )
-            if cached:
-                return {
-                    "command": command.model_dump(mode="json"),
-                    "cached_result": cached,
-                }
+            if command.persist_result:
+                cached = repo.idempotent_result(
+                    command.case_id,
+                    "analysis",
+                    command.idempotency_key,
+                )
+                if cached:
+                    return {
+                        "command": command.model_dump(mode="json"),
+                        "cached_result": cached,
+                    }
             state: dict[str, Any]
             previous: dict[str, Any] | None
             if command.case_state is not None:
@@ -99,17 +123,18 @@ def load_analysis_stage(
                 case_version = repo.case_version(command.case_id)
             if not state.get("images"):
                 raise ValueError("analysis requires at least one image")
-            cached = repo.claim_idempotency(
-                command.case_id,
-                "analysis",
-                command.idempotency_key,
-                command.analysis_id,
-            )
-            if cached:
-                return {
-                    "command": command.model_dump(mode="json"),
-                    "cached_result": cached,
-                }
+            if command.persist_result:
+                cached = repo.claim_idempotency(
+                    command.case_id,
+                    "analysis",
+                    command.idempotency_key,
+                    command.analysis_id,
+                )
+                if cached:
+                    return {
+                        "command": command.model_dump(mode="json"),
+                        "cached_result": cached,
+                    }
             return {
                 "command": command.model_dump(mode="json"),
                 "case_state": state,
@@ -122,6 +147,7 @@ def extract_evidence_stage(
     payload: dict[str, Any],
     *,
     provider: VisionProvider | None = None,
+    agent_backend_registry: AgentBackendRegistry | None = None,
 ) -> dict[str, Any]:
     if payload.get("cached_result"):
         return payload
@@ -129,7 +155,11 @@ def extract_evidence_stage(
     state = dict(payload["case_state"])
     evidence_set = extract_original_images(
         images=state["images"],
-        provider=_provider(provider),
+        provider=_provider(
+            state,
+            provider,
+            agent_backend_registry,
+        ),
         storage_root=Path(command.storage_root),
         previous_evidence_set=(
             payload.get("previous_analysis", {}).get("evidence_set", [])
@@ -153,6 +183,8 @@ def renew_analysis_stage(
     if payload.get("cached_result"):
         return payload
     command = AnalysisCommand.model_validate(payload["command"])
+    if not command.persist_result:
+        return payload
     sessions = session_factory(build_engine(_database_url(database_url)))
     with sessions() as session:
         with session.begin():
@@ -231,6 +263,8 @@ def persist_analysis_stage(
         return dict(cached)
     command = AnalysisCommand.model_validate(payload["command"])
     analysis = dict(payload["analysis"])
+    if not command.persist_result:
+        return analysis
     sessions = session_factory(build_engine(_database_url(database_url)))
     with sessions() as session:
         with session.begin():
@@ -264,6 +298,8 @@ def fail_analysis_stage(
 ) -> None:
     raw_command = payload.get("command", payload)
     command = AnalysisCommand.model_validate(raw_command)
+    if not command.persist_result:
+        return
     sessions = session_factory(build_engine(_database_url(database_url)))
     with sessions() as session:
         with session.begin():
@@ -280,12 +316,17 @@ def execute_analysis_command(
     *,
     database_url: str | None = None,
     provider: VisionProvider | None = None,
+    agent_backend_registry: AgentBackendRegistry | None = None,
     market_data_resolver: MarketDataResolver | None = None,
     strategy_registry: StrategyRegistry | None = None,
 ) -> dict[str, Any]:
     loaded = load_analysis_stage(command.model_dump(mode="json"), database_url=database_url)
     try:
-        extracted = extract_evidence_stage(loaded, provider=provider)
+        extracted = extract_evidence_stage(
+            loaded,
+            provider=provider,
+            agent_backend_registry=agent_backend_registry,
+        )
         merged = merge_market_stage(extracted, market_data_resolver=market_data_resolver)
         evaluated = evaluate_strategy_stage(
             merged,
@@ -303,11 +344,16 @@ class AnalysisActivities:
         *,
         database_url: str | None = None,
         provider: VisionProvider | None = None,
+        agent_backend_registry: AgentBackendRegistry | None = None,
         market_data_resolver: MarketDataResolver | None = None,
         strategy_registry: StrategyRegistry | None = None,
     ) -> None:
         self.database_url = database_url
         self.provider = provider
+        self.agent_backend_registry = (
+            agent_backend_registry
+            or configured_agent_backend_registry(Settings())
+        )
         self.market_data_resolver = market_data_resolver or NullMarketDataResolver()
         self.strategy_registry = (
             strategy_registry or configured_strategy_registry()
@@ -327,6 +373,7 @@ class AnalysisActivities:
             extract_evidence_stage,
             payload,
             provider=self.provider,
+            agent_backend_registry=self.agent_backend_registry,
         )
 
     @activity.defn(name="renew_analysis")

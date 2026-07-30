@@ -6,7 +6,7 @@
 Browser -> Next.js :8989 -> FastAPI :8000
                               |-> SQLite
                               |-> .local/data/images
-                              |-> local Codex CLI
+                              |-> Codex CLI / Kimi Code ACP
                               `-> inline strategy analysis
 ```
 
@@ -19,12 +19,25 @@ Collector。未设置 `TEMPORAL_ADDRESS` 时，FastAPI 会在当前进程内依�
 - Python 3.10 或更高版本。
 - Node.js 20 或更高版本，以及 npm。
 - 本机可执行 `codex --version`，并配置了可通过环境变量传入的模型供应商凭据。
+- Kimi Code 为可选 Agent；启用前确认 `kimi --version` 和 `kimi doctor` 成功。
 - `8000` 和 `8989` 端口可用。
 - 保持 `TRADING_AGENT_ENABLE_ORDER_EXECUTION=false`。本项目不连接实盘下单网关。
 
-Codex 是默认且优先的多模态模型。运行时直接把用户原图交给 Codex CLI，不使用
-OpenCV、本地 OCR、图表切片或坐标重建。Kimi 仅作为失效关闭的备用路径；本地
-配置默认不会启用 Kimi，因为仅有 CLI 和临时目录不构成可信隔离边界。
+Codex 是默认 Agent，默认模型为 `gpt-5.6-sol`。用户也可以显式选择 Kimi Code；
+Kimi 默认模型为 `kimi-k3`，界面显示为 `Kimi 3`，并保留
+`kimi-code/kimi-for-coding` 作为另一个可见选项。Agent 和模型固定到案例，
+原图识别、澄清理解和后续追问始终使用同一个选择。系统不会静默回退；选定 Agent
+不可用时会返回具体原因，原 Agent 和原分析保持不变。
+
+两个 Agent 都直接接收用户原图，不使用 OpenCV、本地 OCR、图表切片或坐标重建。
+Kimi 通过 `kimi -m <model> acp` 运行，原始图片字节以 ACP image block 发送，
+工具权限请求一律拒绝，进程有固定超时并在调用后终止。
+
+应用只读取现有 `~/.kimi-code/config.toml` 和 Kimi Code 登录态，不安装 Kimi
+Code，也不升级或改写 Kimi Code。Kimi 模型只有在配置中存在对应别名且 capabilities 包含
+`image_in`，并且 ACP 初始化与会话创建成功时才可用；这一步同时验证现有认证。
+否则前端保留该选项并显示禁用原因。Kimi 是可选项，其不可用不会阻止 Codex 和
+本地服务启动。
 
 ## 首次初始化
 
@@ -43,6 +56,7 @@ OpenCV、本地 OCR、图表切片或坐标重建。Kimi 仅作为失效关闭�
 4. 把 SQLite 数据库和原图目录固定到 `.local/data` 的绝对路径。
 5. 执行 `alembic upgrade head`。
 6. 从当前 shell 读取 `CODE_CLI_API_KEY` 并写入私有环境文件。
+7. 检测 Codex、Kimi Code、`kimi-k3`、`kimi-code/kimi-for-coding` 的独立可用性。
 
 初始化完成后创建第一个 SQLite 登录用户：
 
@@ -160,6 +174,12 @@ FastAPI 仍保持无 Bearer Token 返回 `401` 的保护。中间阶段失败时
 重新选择相同原图也会恢复同一案例。只要任一字段或图片发生变化，服务端就拒绝
 沿用旧案例，用户必须点击“放弃本次并新建分析”，从而避免最终结论对应旧输入。
 
+首页和案例页都提供 Agent 与模型下拉选择。默认组合是
+`Codex / gpt-5.6-sol`；切换到 Kimi Code 时默认选择 `Kimi 3 / kimi-k3`。
+只有一个可用模型时下拉仍然保留。不可用模型不会被隐藏，而是禁用并展示原因。
+已有截图的案例切换 Agent 或模型时，会用原始图片完整重分析并新增不可变分析版本；
+旧结论继续保留。切换调用失败时不会提交新选择，也不会自动改用另一个 Agent。
+
 进程 PID、元数据和日志位置：
 
 ```text
@@ -192,14 +212,20 @@ cd ..
 ./bin/trading-agent-local doctor
 ```
 
-诊断项包括 Python、Node、npm、Codex CLI、虚拟环境、前端构建、密钥、SQLite
-绝对路径、图片目录写权限、内联分析约束和端口占用。任一必需项失败时，`start`
-拒绝启动。
+诊断项包括 Python、Node、npm、Codex CLI、Kimi Code 各模型、虚拟环境、前端
+构建、密钥、SQLite 绝对路径、图片目录写权限、内联分析约束和端口占用。Codex
+检查是必需项；Kimi Code / Kimi 3 与 Kimi for Coding 是可选检查。任一必需项
+失败时，`start` 拒绝启动。
 
 常见问题：
 
 - `codex` 不可用：确认 `codex --version` 成功，并检查本机登录状态和
   `~/.codex/config.toml`。
+- `Kimi 3` 不可用：确认 `kimi --version`、`kimi doctor` 成功，并确认
+  `~/.kimi-code/config.toml` 中存在 `kimi-k3`，其 capabilities 包含
+  `image_in`。应用不会自动升级或修改该配置。
+- `Kimi for Coding` 不可用：`kimi-code/kimi-for-coding` 必须单独声明
+  `image_in`；只有 `video_in` 或 `tool_use` 不满足截图分析要求。
 - API 启动失败：查看 `.local/logs/api.log`。
 - Web 启动失败：查看 `.local/logs/web.log`，并确认已经执行生产构建。
 - 端口被其他程序占用：先停止占用 `8000` 或 `8989` 的程序，再重新启动。
@@ -245,7 +271,8 @@ cp -R .local/data/images /安全备份目录/images
 ./bin/trading-agent-local status
 ```
 
-随后验证 API 鉴权、创建案例、上传原始截图、执行真实 Codex 多模态分析、动态
-策略里程碑、最终动作与步骤严格对齐、持续追问、对话澄清、策略切换、审计抽屉
-和原图代理访问。本阶段只验收桌面页面。完成后执行
+随后验证 API 鉴权、创建案例、Agent 与模型选择、上传原始截图、执行真实 Codex
+多模态分析、动态策略里程碑、最终动作与步骤严格对齐、持续追问、对话澄清、
+策略切换、审计抽屉和原图代理访问。只有 `kimi-k3` 已配置 `image_in` 且认证有效
+时才执行真实 Kimi 图片 smoke test；否则验收禁用原因。完成后执行
 `./bin/trading-agent-local stop`。

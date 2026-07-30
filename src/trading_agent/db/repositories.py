@@ -83,6 +83,7 @@ class CaseRepository:
         risk: dict | None = None,
         user_input: dict | None = None,
         strategy: dict | None = None,
+        agent_backend: dict | None = None,
     ) -> dict:
         resolved_case_id = case_id or str(uuid4())
         state: dict = {
@@ -98,6 +99,11 @@ class CaseRepository:
                 "strategy_id": "structure_confirmation",
                 "version": "1.0.0",
                 "display_name": "结构确认策略",
+            },
+            "agent_backend": agent_backend or {
+                "backend_id": "codex",
+                "model_id": "gpt-5.6-sol",
+                "display_name": "Codex",
             },
             "messages": [],
         }
@@ -205,6 +211,12 @@ class CaseRepository:
             message = payload.get("message")
             if isinstance(message, dict):
                 state.setdefault("messages", []).append(deepcopy(message))
+        elif event_type == "AGENT_BACKEND_SELECTED":
+            agent_backend = payload.get("agent_backend", payload)
+            state["agent_backend"] = deepcopy(agent_backend)
+            message = payload.get("message")
+            if isinstance(message, dict):
+                state.setdefault("messages", []).append(deepcopy(message))
         elif event_type == "CASE_CLOSED":
             state["lifecycle"] = "CLOSED"
         return state
@@ -237,6 +249,7 @@ class CaseRepository:
                     "contract": state.get("contract"),
                     "instrument": state.get("instrument"),
                     "strategy": deepcopy(state.get("strategy")),
+                    "agent_backend": deepcopy(state.get("agent_backend")),
                     "current_decision": deepcopy(state.get("current_decision")),
                     "lifecycle": state.get("lifecycle"),
                     "created_at": record.created_at.isoformat(),

@@ -367,7 +367,11 @@ button { cursor: pointer; }
   min-height: 76px;
   padding: 14px 24px;
   display: grid;
-  grid-template-columns: 1fr minmax(220px, 300px) auto;
+  grid-template-columns:
+    minmax(130px, 1fr)
+    minmax(190px, 260px)
+    minmax(280px, 360px)
+    auto;
   gap: 18px;
   align-items: center;
   border-bottom: 1px solid var(--line);
@@ -482,6 +486,45 @@ button { cursor: pointer; }
   color: var(--red);
   font-size: 10px;
 }
+.agent-selector {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(110px, .8fr) minmax(145px, 1.2fr);
+  gap: 6px 10px;
+}
+.agent-selector label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.agent-selector label > span {
+  color: var(--muted);
+  font: 800 9px "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .1em;
+}
+.agent-selector select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink);
+  border-radius: 0;
+  padding: 6px 20px 7px 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 900;
+}
+.agent-selector select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.agent-selector > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+.agent-selector > .agent-selector__error { color: var(--red); }
 
 .chat-thread {
   min-height: 0;
@@ -763,7 +806,11 @@ dd { margin: 6px 0 0; font-size: 12px; font-weight: 900; overflow-wrap: anywhere
 .initial-composer > textarea:focus { outline: 0; }
 .composer-controls {
   display: grid;
-  grid-template-columns: auto minmax(220px, 1fr) auto;
+  grid-template-columns:
+    auto
+    minmax(180px, .8fr)
+    minmax(280px, 1.2fr)
+    auto;
   gap: 14px;
   align-items: end;
   border-top: 1px solid var(--line);

@@ -123,6 +123,26 @@ def test_each_page_documents_market_data_and_safety_defaults() -> None:
     assert "does not connect to a live order gateway" in ENGLISH
 
 
+def test_each_page_documents_explicit_agent_and_model_selection() -> None:
+    shared = (
+        "gpt-5.6-sol",
+        "kimi-k3",
+        "Kimi 3",
+        "kimi-code/kimi-for-coding",
+        "image_in",
+        "kimi --version",
+        "./bin/trading-agent-local doctor",
+    )
+
+    for text in shared:
+        assert text in CHINESE
+        assert text in ENGLISH
+    assert "不会静默回退" in CHINESE
+    assert "does not silently fall back" in ENGLISH
+    assert "不升级或改写 Kimi Code" in CHINESE
+    assert "does not upgrade or rewrite Kimi Code" in ENGLISH
+
+
 def test_excluded_operational_sections_are_absent() -> None:
     forbidden_chinese = (
         "### SQLite 备份",

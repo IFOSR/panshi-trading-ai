@@ -9,14 +9,11 @@ class Settings(BaseSettings):
     environment: str = "test"
     enable_order_execution: bool = False
     primary_vision_provider: str = "codex"
-    fallback_vision_provider: str = "kimi"
     codex_model: str = "gpt-5.6-sol"
     codex_model_provider: str | None = None
     codex_provider_base_url: str | None = None
     codex_provider_env_key: str | None = None
-    kimi_model: str = "default"
-    kimi_external_isolation_verified: bool = False
-    kimi_isolation_provider: str | None = None
+    kimi_model: str = "kimi-k3"
     market_data_provider: Literal["none", "free", "http"] = "none"
     market_data_history_length: int = 240
     market_data_timeout_seconds: float = 10.0

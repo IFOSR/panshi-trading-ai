@@ -6,7 +6,14 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from trading_agent.agents.models import (
+    AgentBackendManifest,
+    AgentModelManifest,
+    AgentRuntime,
+)
+from trading_agent.agents.registry import AgentBackendRegistry
 from trading_agent.domain.enums import EvidenceUsage, MilestoneStatus
+from trading_agent.domain.evidence import ScreenshotEvidence
 from trading_agent.domain.milestone import MilestoneResult
 from trading_agent.strategies.contracts import (
     StrategyInputSnapshot,
@@ -21,7 +28,10 @@ from trading_agent.workflows.activities import (
     AnalysisActivities,
     AnalysisCommand,
     evaluate_strategy_stage,
+    extract_evidence_stage,
     load_analysis_stage,
+    persist_analysis_stage,
+    renew_analysis_stage,
 )
 from trading_agent.workflows.worker import TASK_QUEUE, DurableAnalysisWorkflow
 
@@ -89,6 +99,66 @@ def test_temporal_load_rejects_a_snapshot_after_case_state_changes(tmp_path) -> 
             command.model_dump(mode="json"),
             database_url=database_url,
         )
+
+
+def test_staged_temporal_analysis_does_not_claim_or_persist_result(
+    tmp_path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'staged.db'}"
+    engine = build_engine(database_url)
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    with sessions() as session:
+        with session.begin():
+            repo = CaseRepository(session)
+            state = repo.create_case("rb", "rb2610")
+            case_id = state["case_id"]
+            state["images"] = [{"image_id": "image-1", "path": "chart.png"}]
+            state["image_ids"] = ["image-1"]
+            repo.update_case(
+                case_id,
+                state,
+                "IMAGE_UPLOADED",
+                state["images"][0],
+            )
+            snapshot = repo.get_case(case_id)
+            snapshot_version = repo.case_version(case_id)
+            assert snapshot is not None
+    command = AnalysisCommand(
+        case_id=case_id,
+        idempotency_key="agent-switch-analysis",
+        storage_root=str(tmp_path),
+        persist_result=False,
+        case_state=snapshot,
+        case_version=snapshot_version,
+    )
+
+    loaded = load_analysis_stage(
+        command.model_dump(mode="json"),
+        database_url=database_url,
+    )
+    replayed = load_analysis_stage(
+        {
+            **command.model_dump(mode="json"),
+            "analysis_id": str(uuid4()),
+        },
+        database_url=database_url,
+    )
+    renewed = renew_analysis_stage(loaded, database_url=database_url)
+    analysis = {
+        "analysis_id": command.analysis_id,
+        "decision": {"action": "WAIT_FOR_DATA"},
+    }
+    result = persist_analysis_stage(
+        {**renewed, "analysis": analysis},
+        database_url=database_url,
+    )
+
+    assert replayed.get("cached_result") is None
+    assert renewed == loaded
+    assert result == analysis
+    with sessions() as session:
+        assert CaseRepository(session).analyses(case_id) == []
 
 
 class TemporalThreeStepStrategy:
@@ -174,6 +244,85 @@ def test_temporal_evaluation_uses_the_case_pinned_strategy() -> None:
     assert analysis["milestones"][-1]["code"] == "RISK_AND_ACTION"
     assert analysis["audit"]["strategy_id"] == "temporal_three_step"
     assert analysis["audit"]["strategy_version"] == "3.1.0"
+
+
+def test_temporal_extraction_uses_the_case_pinned_agent(tmp_path) -> None:
+    calls: list[str] = []
+
+    class Provider:
+        def analyze(self, request):
+            calls.append("kimi")
+            return ScreenshotEvidence(
+                image_role="STATE_DAILY",
+                provider="kimi",
+                model="kimi-k3",
+                prompt_version=request.prompt_version,
+                image_sha256="fixture",
+            )
+
+        def interpret(self, request):
+            raise AssertionError("clarification is not needed")
+
+        def reply(self, request):
+            raise AssertionError("conversation is not needed")
+
+    manifest = AgentBackendManifest(
+        backend_id="kimi",
+        display_name="Kimi Code",
+        default_model_id="kimi-k3",
+        capabilities=["vision", "clarification", "conversation"],
+        available=True,
+        models=[
+            AgentModelManifest(
+                model_id="kimi-k3",
+                display_name="Kimi 3",
+                capabilities=["vision", "clarification", "conversation"],
+                available=True,
+            )
+        ],
+    )
+    provider = Provider()
+    registry = AgentBackendRegistry(
+        manifests=[manifest],
+        runtime_factory=lambda backend_id, model_id: AgentRuntime(
+            backend_id=backend_id,
+            model_id=model_id,
+            vision=provider,
+            clarification=provider,
+            conversation=provider,
+        ),
+    )
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+
+    result = extract_evidence_stage(
+        {
+            "command": {
+                "case_id": "case-1",
+                "idempotency_key": "analysis-1",
+                "storage_root": str(tmp_path),
+            },
+            "case_state": {
+                "agent_backend": {
+                    "backend_id": "kimi",
+                    "model_id": "kimi-k3",
+                },
+                "images": [
+                    {
+                        "image_id": "image-1",
+                        "image_role": "STATE_DAILY",
+                        "path": str(image_path),
+                        "safe_for_model": True,
+                    }
+                ],
+            },
+            "previous_analysis": None,
+        },
+        agent_backend_registry=registry,
+    )
+
+    assert calls == ["kimi"]
+    assert result["evidence_set"][0]["provider"] == "kimi"
 
 
 @pytest.mark.asyncio

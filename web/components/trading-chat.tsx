@@ -4,12 +4,14 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import type {
+  AgentBackendManifest,
   CaseView,
   ConversationMessage,
   ConversationSummary,
   ConversationView,
   StrategyManifest
 } from "../lib/api";
+import { AgentSelector } from "./agent-selector";
 import { ConversationSidebar } from "./conversation-sidebar";
 import { DecisionSummary } from "./decision-summary";
 import { StrategyAuditDrawer } from "./strategy-audit-drawer";
@@ -50,12 +52,14 @@ function messageTime(value: string): string {
 }
 
 export function TradingChat({
+  agents,
   caseId,
   caseView,
   conversation,
   conversations,
   strategies
 }: {
+  agents: AgentBackendManifest[];
   caseId: string;
   caseView: CaseView;
   conversation: ConversationView;
@@ -246,6 +250,29 @@ export function TradingChat({
             }}
             strategies={strategies}
             value={strategyValue}
+          />
+          <AgentSelector
+            agents={agents}
+            backendId={conversation.agentBackend.backendId}
+            caseId={caseId}
+            disabled={sending}
+            modelId={conversation.agentBackend.modelId}
+            onSelected={(backend, model) => {
+              setMessages((current) => [...current, {
+                messageId: `agent:${crypto.randomUUID()}`,
+                role: "system",
+                messageType: "AGENT_BACKEND_CHANGE",
+                content: (
+                  `已切换至 ${backend.displayName} · ${model.displayName}`
+                ),
+                createdAt: new Date().toISOString(),
+                analysisId: null,
+                metadata: {
+                  backend_id: backend.backendId,
+                  model_id: model.modelId
+                }
+              }]);
+            }}
           />
           <div className="chat-topbar__actions">
             <button

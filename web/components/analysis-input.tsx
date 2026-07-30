@@ -4,9 +4,11 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import type {
+  AgentBackendManifest,
   ConversationSummary,
   StrategyManifest
 } from "../lib/api";
+import { AgentSelector } from "./agent-selector";
 import { ConversationSidebar } from "./conversation-sidebar";
 import { StrategySelector } from "./strategy-selector";
 
@@ -23,9 +25,11 @@ const PENDING_SUBMISSION_KEY = "panshi.pendingSubmissionId";
 const PENDING_CASE_KEY = "panshi.pendingCaseId";
 
 export function AnalysisInput({
+  agents,
   strategies,
   conversations
 }: {
+  agents: AgentBackendManifest[];
   strategies: StrategyManifest[];
   conversations: ConversationSummary[];
 }) {
@@ -37,6 +41,16 @@ export function AnalysisInput({
     strategies[0]
       ? `${strategies[0].strategyId}@${strategies[0].version}`
       : "structure_confirmation@1.0.0"
+  );
+  const defaultAgent = (
+    agents.find((item) => item.backendId === "codex")
+    ?? agents[0]
+  );
+  const [agentBackendId, setAgentBackendId] = useState(
+    defaultAgent?.backendId ?? "codex"
+  );
+  const [agentModelId, setAgentModelId] = useState(
+    defaultAgent?.defaultModelId ?? "gpt-5.6-sol"
   );
   const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -74,6 +88,8 @@ export function AnalysisInput({
     formData.set("privacyConfirmed", "on");
     formData.set("strategyId", strategyId);
     formData.set("strategyVersion", strategyVersion);
+    formData.set("agentBackendId", agentBackendId);
+    formData.set("agentModelId", agentModelId);
     formData.set("dailyImage", files[0], files[0].name);
     if (files[1]) {
       formData.set("executionImage", files[1], files[1].name);
@@ -237,6 +253,16 @@ export function AnalysisInput({
               strategies={strategies}
               value={strategyValue}
             />
+            <AgentSelector
+              agents={agents}
+              backendId={agentBackendId}
+              disabled={submitting}
+              modelId={agentModelId}
+              onSelected={(backend, model) => {
+                setAgentBackendId(backend.backendId);
+                setAgentModelId(model.modelId);
+              }}
+            />
             <button
               disabled={submitting || files.length === 0 || !privacyConfirmed}
               type="submit"
@@ -292,7 +318,10 @@ export function AnalysisInput({
         <strong>先证据，后策略，再动作</strong>
         <p>模型负责图像理解，策略插件负责里程碑，独立风控决定最终动作边界。</p>
         <dl>
-          <div><dt>图像</dt><dd>Codex 优先</dd></div>
+          <div>
+            <dt>图像</dt>
+            <dd>{defaultAgent?.displayName ?? "显式选择 Agent"}</dd>
+          </div>
           <div><dt>数据</dt><dd>公开渠道自动补齐</dd></div>
           <div><dt>结论</dt><dd>与每一步严格对齐</dd></div>
         </dl>

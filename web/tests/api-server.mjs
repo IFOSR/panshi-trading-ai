@@ -194,7 +194,60 @@ const momentumStrategy = {
   entrypoint: "fixture:MomentumBreakout",
   process_label: "动量突破确认"
 };
+const codexAgent = {
+  backend_id: "codex",
+  display_name: "Codex",
+  default_model_id: "gpt-5.6-sol",
+  capabilities: ["vision", "clarification", "conversation"],
+  available: true,
+  unavailable_reason: null,
+  models: [
+    {
+      model_id: "gpt-5.6-sol",
+      display_name: "GPT-5.6",
+      capabilities: ["vision", "clarification", "conversation"],
+      available: true,
+      unavailable_reason: null
+    }
+  ]
+};
+const kimiAgent = {
+  backend_id: "kimi",
+  display_name: "Kimi Code",
+  default_model_id: "kimi-k3",
+  capabilities: ["vision", "clarification", "conversation"],
+  available: true,
+  unavailable_reason: null,
+  models: [
+    {
+      model_id: "kimi-k3",
+      display_name: "Kimi 3",
+      capabilities: ["vision", "clarification", "conversation"],
+      available: true,
+      unavailable_reason: null
+    },
+    {
+      model_id: "kimi-code/kimi-for-coding",
+      display_name: "Kimi for Coding",
+      capabilities: ["vision", "clarification", "conversation"],
+      available: false,
+      unavailable_reason: "缺少 image_in"
+    }
+  ]
+};
+const codexSelection = {
+  backend_id: "codex",
+  model_id: "gpt-5.6-sol",
+  display_name: "Codex"
+};
+const kimiSelection = {
+  backend_id: "kimi",
+  model_id: "kimi-k3",
+  display_name: "Kimi Code"
+};
 let strategyCatalogMode = "single";
+let kimiAgentAvailable = true;
+let agentSwitchResponseFailure = false;
 let deletedCaseIds = new Set();
 let historyCleared = false;
 let deleteFailure = false;
@@ -557,6 +610,7 @@ const liveConversation = {
     version: structureStrategy.version,
     display_name: structureStrategy.display_name
   },
+  agentBackend: { ...codexSelection },
   messages: [
     {
       message_id: "message-user-1",
@@ -667,6 +721,24 @@ http.createServer(async (request, response) => {
   }
   if (
     request.method === "POST"
+    && request.url === "/__test/kimi-availability"
+  ) {
+    const payload = JSON.parse((await consume(request)).toString("utf8"));
+    kimiAgentAvailable = payload.available !== false;
+    sendJson(response, { available: kimiAgentAvailable });
+    return;
+  }
+  if (
+    request.method === "POST"
+    && request.url === "/__test/agent-switch-response-failure"
+  ) {
+    const payload = JSON.parse((await consume(request)).toString("utf8"));
+    agentSwitchResponseFailure = payload.enabled === true;
+    sendJson(response, { enabled: agentSwitchResponseFailure });
+    return;
+  }
+  if (
+    request.method === "POST"
     && request.url === "/__test/reset-history"
   ) {
     deletedCaseIds = new Set();
@@ -674,6 +746,17 @@ http.createServer(async (request, response) => {
     deleteFailure = false;
     extraHistoryCount = 0;
     createdCases.clear();
+    sendJson(response, { reset: true });
+    return;
+  }
+  if (
+    request.method === "POST"
+    && request.url === "/__test/reset-live-agent"
+  ) {
+    liveConversation.agentBackend = { ...codexSelection };
+    liveConversation.messages.splice(4);
+    liveAnalyses.splice(2);
+    liveAnalysisSequence = 0;
     sendJson(response, { reset: true });
     return;
   }
@@ -752,6 +835,28 @@ http.createServer(async (request, response) => {
         ? [structureStrategy, momentumStrategy]
         : [structureStrategy]
     );
+    return;
+  }
+  if (request.method === "GET" && request.url === "/v1/agent-backends") {
+    sendJson(response, [
+      codexAgent,
+      kimiAgentAvailable
+        ? kimiAgent
+        : {
+            ...kimiAgent,
+            available: false,
+            unavailable_reason: "Kimi Code 尚未配置模型 kimi-k3",
+            models: kimiAgent.models.map((model) => ({
+              ...model,
+              available: false,
+              unavailable_reason: (
+                model.model_id === "kimi-k3"
+                  ? "Kimi Code 尚未配置模型 kimi-k3"
+                  : "缺少 image_in"
+              )
+            }))
+          }
+    ]);
     return;
   }
   if (request.method === "GET" && request.url === "/v1/cases") {
@@ -850,8 +955,17 @@ http.createServer(async (request, response) => {
     const payload = JSON.parse(body.toString("utf8"));
     const idempotencyKey = request.headers["idempotency-key"];
     const serializedPayload = JSON.stringify(payload);
-    if (!payload.strategy_id || !payload.strategy_version) {
-      sendJson(response, { detail: "strategy selection is required" }, 400);
+    if (
+      !payload.strategy_id
+      || !payload.strategy_version
+      || !payload.agent_backend_id
+      || !payload.agent_model_id
+    ) {
+      sendJson(
+        response,
+        { detail: "strategy and Agent selection are required" },
+        400
+      );
       return;
     }
     if (typeof idempotencyKey === "string" && caseCreations.has(idempotencyKey)) {
@@ -881,6 +995,9 @@ http.createServer(async (request, response) => {
         version: selectedStrategy.version,
         display_name: selectedStrategy.display_name
       },
+      agentBackend: payload.agent_backend_id === "kimi"
+        ? { ...kimiSelection }
+        : { ...codexSelection },
       initialMessage: String(payload.message ?? "请分析这张图。"),
       messages: []
     });
@@ -982,6 +1099,7 @@ http.createServer(async (request, response) => {
     sendJson(response, {
       case_id: "case-live",
       strategy: liveConversation.strategy,
+      agent_backend: liveConversation.agentBackend,
       messages: liveConversation.messages,
       current_analysis_id: liveAnalyses.at(-1).analysis_id
     });
@@ -999,6 +1117,7 @@ http.createServer(async (request, response) => {
         version: structureStrategy.version,
         display_name: structureStrategy.display_name
       },
+      agent_backend: codexSelection,
       messages: [
         {
           message_id: `message-${clarificationConversationMatch[1]}`,
@@ -1038,6 +1157,7 @@ http.createServer(async (request, response) => {
     sendJson(response, {
       case_id: createdConversationMatch[1],
       strategy: state.strategy,
+      agent_backend: state.agentBackend,
       messages: state.messages,
       current_analysis_id: state.analyzed ? "analysis-live" : null
     });
@@ -1102,6 +1222,45 @@ http.createServer(async (request, response) => {
     const reanalysis = appendLiveAnalysis(liveConversation.strategy);
     sendJson(response, {
       ...liveConversation.strategy,
+      analysis_id: reanalysis.analysis_id
+    });
+    return;
+  }
+  if (
+    request.method === "POST"
+    && request.url === "/v1/cases/case-live/agent-backend"
+  ) {
+    const body = JSON.parse((await consume(request)).toString("utf8"));
+    liveConversation.agentBackend = body.backend_id === "kimi"
+      ? { ...kimiSelection }
+      : { ...codexSelection };
+    const selectedAgent = body.backend_id === "kimi" ? kimiAgent : codexAgent;
+    const selectedModel = selectedAgent.models.find(
+      (item) => item.model_id === body.model_id
+    );
+    liveConversation.messages.push({
+      message_id: `agent-${liveConversation.messages.length}`,
+      role: "system",
+      message_type: "AGENT_BACKEND_CHANGE",
+      content: (
+        `已切换至 ${selectedAgent.display_name} · `
+        + `${selectedModel?.display_name ?? body.model_id}`
+      ),
+      created_at: "2026-07-28T09:07:00Z",
+      analysis_id: null,
+      metadata: {
+        backend_id: body.backend_id,
+        model_id: body.model_id
+      }
+    });
+    const reanalysis = appendLiveAnalysis();
+    reanalysis.agent_backend = { ...liveConversation.agentBackend };
+    if (agentSwitchResponseFailure) {
+      sendJson(response, { detail: "response lost after commit" }, 502);
+      return;
+    }
+    sendJson(response, {
+      ...liveConversation.agentBackend,
       analysis_id: reanalysis.analysis_id
     });
     return;

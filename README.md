@@ -9,7 +9,7 @@
 磐石交易AI是一套桌面端分析与决策支持系统。用户可以在持续对话中提交问题和完整
 行情截图，系统自动完成：
 
-- Codex 原图多模态识别；
+- 可选择 Codex 或 Kimi Code 的原图多模态识别；
 - TqSdk / AkShare 公开行情补全；
 - 数据一致性与有效性校验；
 - 版本化策略插件计算；
@@ -29,9 +29,14 @@
 
 ### 直接理解完整原图
 
-运行时把用户上传的完整截图直接交给 Codex 多模态模型。生产证据链不使用
+运行时把用户上传的完整截图直接交给当前案例选定的 Codex 或 Kimi Code
+多模态模型。生产证据链不使用
 OpenCV、图像切片、本地 OCR 或坐标重建来替代模型理解，保留合约、周期、K 线、
-指标和界面上下文。
+指标和界面上下文。Codex 默认模型为 `gpt-5.6-sol`；Kimi Code 默认模型为
+`kimi-k3`，界面显示为 `Kimi 3`。
+
+Agent 与模型会固定到案例，图片识别、澄清理解和后续追问始终使用同一个选择。
+系统不会静默回退到另一个 Agent；不可用时会展示具体原因，由用户明确切换。
 
 ### 自动补充公开数据
 
@@ -66,7 +71,8 @@ flowchart TD
 
     DB[(SQLite<br/>用户、会话、案例、分析版本)]
     IMG[(原图存储<br/>.local/data/images)]
-    V[Codex 多模态<br/>直接读取原图]
+    G[Agent Registry<br/>Codex / Kimi Code + 模型]
+    V[选定的多模态 Agent<br/>直接读取原图]
     M[免费市场数据<br/>TqSdk 主源 / AkShare 降级]
     E[证据合并与有效性校验<br/>来源、冲突、置信度、新鲜度]
     R[策略注册表<br/>Strategy Registry]
@@ -78,7 +84,8 @@ flowchart TD
     W --> A
     A --> DB
     A --> IMG
-    A --> V
+    A --> G
+    G --> V
     A --> M
     V --> E
     M --> E
@@ -97,7 +104,8 @@ flowchart TD
 | Next.js Web | SQLite 账号登录、持续对话、截图附件、策略选择和历史记录 |
 | FastAPI | API 鉴权、原图保存、案例状态、分析编排和会话管理 |
 | SQLite | 保存用户密码哈希、会话摘要、案例事件和分析版本 |
-| Codex | 直接读取原图，输出结构化观察、可见文字、置信度和不确定项 |
+| Agent Registry | 列出 Codex、Kimi Code 和模型能力，并把选择固定到案例 |
+| Codex / Kimi Code | 直接读取原图，输出结构化观察、可见文字、置信度和不确定项 |
 | TqSdk / AkShare | 补充中国期货公开行情；TqSdk 可选，AkShare 自动降级 |
 | 证据层 | 合并截图与结构化行情，检测冲突、缺失、收盘状态和数据质量 |
 | 策略注册表 | 发现、选择并固定策略插件版本 |
@@ -109,7 +117,8 @@ flowchart TD
 
 ```text
 用户问题与完整原图
-  -> Codex 直接多模态抽取
+  -> 选定 Codex 或 Kimi Code 及模型
+  -> 选定 Agent 直接多模态抽取
   -> TqSdk / AkShare 自动补充公开行情
   -> 证据合并、来源追踪和数据有效性判断
   -> 选择并固定策略 ID 与版本
@@ -127,7 +136,7 @@ flowchart TD
 Browser -> Next.js :8989 -> FastAPI :8000
                               |-> SQLite
                               |-> 原图目录
-                              |-> Codex CLI
+                              |-> Codex CLI / Kimi Code ACP
                               `-> 进程内策略分析
 ```
 
@@ -143,6 +152,7 @@ Temporal、独立 Worker 或 OTel Collector。
 - Node.js 20 或更高版本；
 - npm、Git；
 - 可执行的 Codex CLI；
+- 可选的 Kimi Code CLI；
 - 可通过环境变量传入的模型供应商 API Key；
 - 空闲的本地端口 `8000` 和 `8989`。
 
@@ -154,6 +164,7 @@ node --version
 npm --version
 git --version
 codex --version
+kimi --version
 ```
 
 ### 2. 获取代码
@@ -172,7 +183,7 @@ gh repo clone IFOSR/panshi-trading-ai
 cd panshi-trading-ai
 ```
 
-### 3. 配置 Codex 凭据
+### 3. 配置 Agent 与模型
 
 Codex 是默认且优先的多模态提供方。初始化程序从当前 shell 读取
 `CODE_CLI_API_KEY`：
@@ -194,6 +205,23 @@ TRADING_AGENT_CODEX_PROVIDER_ENV_KEY=CODE_CLI_API_KEY
 CODE_CLI_API_KEY=<your-code-cli-api-key>
 ```
 
+Codex 默认模型为 `gpt-5.6-sol`。Kimi Code 是可选 Agent，应用不会安装、升级或
+改写 Kimi Code，也不会修改 `~/.kimi-code/config.toml`。如需启用 Kimi：
+
+```sh
+kimi --version
+kimi doctor
+```
+
+Kimi Code 配置必须提供模型别名 `kimi-k3`，并在该模型的 capabilities 中声明
+`image_in`。界面默认把它显示为 `Kimi 3`。系统也会列出
+`kimi-code/kimi-for-coding`，但只有该别名同样声明 `image_in` 时才可用于截图
+分析。模型还必须通过 ACP 初始化和会话创建，以验证现有认证可用。缺少 CLI、
+模型别名、图片能力或 ACP 认证时，模型仍会显示，但处于禁用状态并说明原因。
+
+Kimi 调用使用 `kimi -m <model> acp`，原图字节通过 ACP image block 发送；工具
+权限一律拒绝。应用只读取现有 Kimi Code 登录态和模型配置，不升级或改写 Kimi Code。
+
 ### 4. 初始化
 
 从仓库根目录执行：
@@ -204,7 +232,8 @@ CODE_CLI_API_KEY=<your-code-cli-api-key>
 ```
 
 `init` 会创建 Python 环境、安装依赖、构建前端、生成本地配置、初始化 SQLite，并
-检查 Codex 和市场数据依赖。主要本地文件如下：
+检查 Agent、模型和市场数据依赖。Codex 是必需项；Kimi Code 是可选项，未配置不会
+阻止服务启动。主要本地文件如下：
 
 ```text
 .local/env                         私有运行配置和服务密钥
@@ -295,9 +324,9 @@ TRADING_AGENT_ENABLE_ORDER_EXECUTION=false
 ## 使用流程
 
 1. 使用 SQLite 账号登录 Web。
-2. 选择策略，输入分析问题。
+2. 选择策略、Agent 和模型，输入分析问题。
 3. 上传一至两张包含合约、周期和完整图表上下文的行情截图。
-4. 系统直接使用 Codex 识别原图，并自动补充公开行情。
+4. 系统直接使用选定 Agent 识别原图，并自动补充公开行情。
 5. 页面展示数据有效性、策略里程碑、风险约束和最终动作。
 6. 用户可以继续追问结论、步骤、证据或风险依据。
 7. 只有公开数据和截图仍无法消除的真实歧义才通过对话澄清。
@@ -355,6 +384,19 @@ codex --version
 
 确认当前 shell 已配置供应商凭据，并检查 `.local/env` 中的模型供应商字段。
 
+### Kimi Code 或 Kimi 3 不可用
+
+```sh
+kimi --version
+kimi doctor
+./bin/trading-agent-local doctor
+```
+
+确认 `~/.kimi-code/config.toml` 中存在 `kimi-k3`，且 capabilities 包含
+`image_in`。`kimi-code/kimi-for-coding` 同样需要 `image_in` 才会启用。应用
+不会自动升级、修改配置或静默回退到 Codex；可以继续使用 Codex，或在修复 Kimi
+配置后显式切换。
+
 ### Web 无法访问
 
 ```sh
@@ -394,7 +436,7 @@ python3 -m venv .venv
 pip install -e '.[dev]'
 pytest -q
 ruff check .
-mypy
+mypy src/trading_agent
 ```
 
 前端：

@@ -26,6 +26,8 @@ const ALLOWED_FORM_FIELDS = new Set([
   "executionImage"
   ,"strategyId"
   ,"strategyVersion"
+  ,"agentBackendId"
+  ,"agentModelId"
 ]);
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
@@ -197,6 +199,8 @@ export async function POST(request: Request): Promise<Response> {
     executionImage: File | null;
     strategyId: string;
     strategyVersion: string;
+    agentBackendId: string;
+    agentModelId: string;
   };
   try {
     const contract = optionalText(formData, "contract")?.toLowerCase() ?? null;
@@ -277,6 +281,16 @@ export async function POST(request: Request): Promise<Response> {
       "strategyVersion",
       "策略版本"
     );
+    const agentBackendId = requiredText(
+      formData,
+      "agentBackendId",
+      "分析 Agent"
+    );
+    const agentModelId = requiredText(
+      formData,
+      "agentModelId",
+      "分析模型"
+    );
     const dailySha256 = await sha256Hex(await dailyImage.arrayBuffer());
     const executionSha256 = executionImage
       ? await sha256Hex(await executionImage.arrayBuffer())
@@ -299,7 +313,9 @@ export async function POST(request: Request): Promise<Response> {
           }
         : null,
       strategyId,
-      strategyVersion
+      strategyVersion,
+      agentBackendId,
+      agentModelId
     }));
     input = {
       submissionId,
@@ -312,7 +328,9 @@ export async function POST(request: Request): Promise<Response> {
       dailyImage,
       executionImage,
       strategyId,
-      strategyVersion
+      strategyVersion,
+      agentBackendId,
+      agentModelId
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "输入内容无效。";
@@ -381,7 +399,9 @@ export async function POST(request: Request): Promise<Response> {
             message: input.message,
             submission_fingerprint: input.submissionFingerprint,
             strategy_id: input.strategyId,
-            strategy_version: input.strategyVersion
+            strategy_version: input.strategyVersion,
+            agent_backend_id: input.agentBackendId,
+            agent_model_id: input.agentModelId
           })
         });
         const created = await createdResponse.json() as { case_id: string };
@@ -451,7 +471,14 @@ export async function POST(request: Request): Promise<Response> {
         progress("images", "completed", `${images.length} 张原图已进入证据链`);
 
         currentStage = "analysis";
-        progress("analysis", "running", "Codex 正在执行多模态抽取与策略分析");
+        const agentName = input.agentBackendId === "kimi"
+          ? "Kimi Code"
+          : "Codex";
+        progress(
+          "analysis",
+          "running",
+          `${agentName} 正在执行多模态抽取与策略分析`
+        );
         const analysisResponse = await apiFetch(
           `/v1/cases/${encodeURIComponent(caseId)}/analysis`,
           {

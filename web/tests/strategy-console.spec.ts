@@ -27,6 +27,110 @@ test("opens the strategy list with one registered strategy", async ({ page }) =>
   await expect(page.getByText("合约或品种标题")).toBeVisible();
 });
 
+test("selects an Agent and defaults Kimi Code to Kimi 3", async ({ page }) => {
+  await page.goto("/");
+
+  const agent = page.getByLabel("分析 Agent");
+  const model = page.getByLabel("分析模型");
+  await expect(agent).toHaveValue("codex");
+  await expect(model).toHaveValue("gpt-5.6-sol");
+
+  await agent.selectOption("kimi");
+
+  await expect(model).toHaveValue("kimi-k3");
+  await expect(model.locator('option[value="kimi-k3"]')).toHaveText("Kimi 3");
+  const codingModel = model.locator(
+    'option[value="kimi-code/kimi-for-coding"]'
+  );
+  await expect(codingModel).toHaveAttribute("disabled", "");
+  await expect(page.getByTestId("agent-availability")).toContainText(
+    "缺少 image_in"
+  );
+});
+
+test("keeps an Agent visible but disabled when it has no usable model", async ({
+  page,
+  request
+}) => {
+  await request.post("http://127.0.0.1:3199/__test/kimi-availability", {
+    data: { available: false }
+  });
+  await page.goto("/");
+
+  const agent = page.getByLabel("分析 Agent");
+  await expect(agent.locator('option[value="kimi"]')).toHaveAttribute(
+    "disabled",
+    ""
+  );
+  await expect(agent).toHaveValue("codex");
+  await expect(page.getByTestId("agent-availability")).toContainText(
+    "Kimi Code 尚未配置模型 kimi-k3"
+  );
+
+  await request.post("http://127.0.0.1:3199/__test/kimi-availability", {
+    data: { available: true }
+  });
+});
+
+test("submits the selected Agent and model with a new analysis", async ({
+  page
+}) => {
+  await page.goto("/");
+  await page.getByLabel("分析 Agent").selectOption("kimi");
+  await page.getByLabel("告诉磐石你想分析什么").fill("使用 Kimi 3 分析。");
+  await page.getByLabel("上传图表截图").setInputFiles(chartFixture);
+  await page.getByLabel("已确认截图不含无关个人敏感信息").check();
+  await page.getByRole("button", { name: "发送并分析" }).click();
+
+  await expect(page).toHaveURL(/\/cases\/case-created-\d+/, {
+    timeout: 20_000
+  });
+  await expect(page.getByLabel("分析 Agent")).toHaveValue("kimi");
+  await expect(page.getByLabel("分析模型")).toHaveValue("kimi-k3");
+});
+
+test("switches the complete Agent in an existing conversation", async ({
+  page,
+  request
+}) => {
+  await page.goto("/cases/case-live");
+  const historicalBefore = await page
+    .getByTestId("historical-conclusion")
+    .count();
+
+  await page.getByLabel("分析 Agent").selectOption("kimi");
+
+  await expect(page.getByText(/已切换至 Kimi Code · Kimi 3/)).toBeVisible();
+  await expect(page.getByLabel("分析模型")).toHaveValue("kimi-k3");
+  await expect(page.getByTestId("historical-conclusion")).toHaveCount(
+    historicalBefore + 1
+  );
+  await request.post("http://127.0.0.1:3199/__test/reset-live-agent");
+});
+
+test("reconciles Agent selection when the committed response is lost", async ({
+  page,
+  request
+}) => {
+  await request.post("http://127.0.0.1:3199/__test/reset-live-agent");
+  await request.post(
+    "http://127.0.0.1:3199/__test/agent-switch-response-failure",
+    { data: { enabled: true } }
+  );
+  await page.goto("/cases/case-live");
+
+  await page.getByLabel("分析 Agent").selectOption("kimi");
+
+  await expect(page.getByLabel("分析 Agent")).toHaveValue("kimi");
+  await expect(page.getByText(/已切换至 Kimi Code · Kimi 3/)).toBeVisible();
+
+  await request.post(
+    "http://127.0.0.1:3199/__test/agent-switch-response-failure",
+    { data: { enabled: false } }
+  );
+  await request.post("http://127.0.0.1:3199/__test/reset-live-agent");
+});
+
 test("closes the single-strategy list with Escape from the trigger", async ({
   page
 }) => {
@@ -51,7 +155,10 @@ test("keeps every strategy option inside the viewport", async ({
   await page.goto("/");
   await page.getByRole("button", { name: /分析策略/ }).click();
 
-  const lastOption = page.getByRole("option").last();
+  const lastOption = page
+    .getByRole("listbox", { name: "分析策略" })
+    .getByRole("option")
+    .last();
   await expect(lastOption).toBeVisible();
   const optionBox = await lastOption.boundingBox();
   expect(optionBox).not.toBeNull();

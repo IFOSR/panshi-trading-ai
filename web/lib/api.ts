@@ -1,3 +1,5 @@
+import { proxyConfiguration } from "./server-proxy";
+
 export type Milestone = {
   number: number;
   title: string;
@@ -128,6 +130,30 @@ export type StrategyManifest = {
   supportedTimeframes: string[];
 };
 
+export type AgentModelManifest = {
+  modelId: string;
+  displayName: string;
+  capabilities: string[];
+  available: boolean;
+  unavailableReason: string | null;
+};
+
+export type AgentBackendManifest = {
+  backendId: string;
+  displayName: string;
+  defaultModelId: string;
+  capabilities: string[];
+  available: boolean;
+  unavailableReason: string | null;
+  models: AgentModelManifest[];
+};
+
+export type AgentBackendSelection = {
+  backendId: string;
+  modelId: string;
+  displayName: string;
+};
+
 export type ConversationMessage = {
   messageId: string;
   role: "user" | "assistant" | "system";
@@ -155,6 +181,7 @@ export type ConversationView = {
     version: string;
     displayName: string;
   };
+  agentBackend: AgentBackendSelection;
   messages: ConversationMessage[];
 };
 
@@ -521,17 +548,14 @@ export async function getCaseView(caseId: string): Promise<CaseViewResult> {
   if (!SAFE_ID.test(caseId)) {
     return { status: "error", message: "案例标识无效。" };
   }
-  const baseUrl = process.env.TRADING_API_URL;
-  if (!baseUrl) {
-    return { status: "error", message: "TRADING_API_URL 未配置，无法读取真实案例。" };
-  }
-  const apiToken = process.env.TRADING_AGENT_API_TOKEN;
-  if (!apiToken) {
+  const configuration = serverConfiguration();
+  if (!configuration) {
     return {
       status: "error",
-      message: "TRADING_AGENT_API_TOKEN 未配置，无法访问分析服务。"
+      message: "本地分析服务地址或 API Token 配置无效。"
     };
   }
+  const { baseUrl, apiToken } = configuration;
   try {
     const response = await fetch(`${baseUrl}/v1/cases/${caseId}/analyses`, {
       headers: {
@@ -735,6 +759,22 @@ type ApiStrategyManifest = {
   supported_timeframes: string[];
 };
 
+type ApiAgentBackendManifest = {
+  backend_id: string;
+  display_name: string;
+  default_model_id: string;
+  capabilities: string[];
+  available: boolean;
+  unavailable_reason: string | null;
+  models: {
+    model_id: string;
+    display_name: string;
+    capabilities: string[];
+    available: boolean;
+    unavailable_reason: string | null;
+  }[];
+};
+
 function mapStrategy(item: ApiStrategyManifest): StrategyManifest {
   return {
     strategyId: item.strategy_id,
@@ -748,9 +788,7 @@ function mapStrategy(item: ApiStrategyManifest): StrategyManifest {
 }
 
 function serverConfiguration(): { baseUrl: string; apiToken: string } | null {
-  const baseUrl = process.env.TRADING_API_URL;
-  const apiToken = process.env.TRADING_AGENT_API_TOKEN;
-  return baseUrl && apiToken ? { baseUrl, apiToken } : null;
+  return proxyConfiguration();
 }
 
 export async function getStrategies(): Promise<StrategyManifest[]> {
@@ -765,6 +803,42 @@ export async function getStrategies(): Promise<StrategyManifest[]> {
     });
     if (!response.ok) return [];
     return (await response.json() as ApiStrategyManifest[]).map(mapStrategy);
+  } catch {
+    return [];
+  }
+}
+
+export async function getAgentBackends(): Promise<AgentBackendManifest[]> {
+  const configuration = serverConfiguration();
+  if (!configuration) return [];
+  try {
+    const response = await fetch(
+      `${configuration.baseUrl}/v1/agent-backends`,
+      {
+        headers: {
+          Authorization: `Bearer ${configuration.apiToken}`
+        },
+        cache: "no-store"
+      }
+    );
+    if (!response.ok) return [];
+    return (await response.json() as ApiAgentBackendManifest[]).map(
+      (item) => ({
+        backendId: item.backend_id,
+        displayName: item.display_name,
+        defaultModelId: item.default_model_id,
+        capabilities: item.capabilities,
+        available: item.available,
+        unavailableReason: item.unavailable_reason,
+        models: item.models.map((model) => ({
+          modelId: model.model_id,
+          displayName: model.display_name,
+          capabilities: model.capabilities,
+          available: model.available,
+          unavailableReason: model.unavailable_reason
+        }))
+      })
+    );
   } catch {
     return [];
   }
@@ -827,6 +901,11 @@ export async function getConversation(
         version: string;
         display_name: string;
       };
+      agent_backend: {
+        backend_id: string;
+        model_id: string;
+        display_name: string;
+      };
       messages: {
         message_id: string;
         role: "user" | "assistant" | "system";
@@ -844,6 +923,11 @@ export async function getConversation(
         strategyId: payload.strategy.strategy_id,
         version: payload.strategy.version,
         displayName: payload.strategy.display_name
+      },
+      agentBackend: {
+        backendId: payload.agent_backend.backend_id,
+        modelId: payload.agent_backend.model_id,
+        displayName: payload.agent_backend.display_name
       },
       messages: payload.messages.map((message) => ({
         messageId: message.message_id,
