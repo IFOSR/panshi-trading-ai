@@ -12,6 +12,7 @@ test("redirects unauthenticated pages and rejects protected browser APIs", async
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/login\?next=%2F$/);
+  expect(new URL(page.url()).host).toBe("127.0.0.1:3107");
   await expect(page.getByRole("heading", { name: "登录磐石交易AI" })).toBeVisible();
 
   const response = await request.get("/api/cases");

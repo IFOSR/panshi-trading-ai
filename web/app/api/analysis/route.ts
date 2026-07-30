@@ -1,4 +1,7 @@
-import { proxyConfiguration } from "../../../lib/server-proxy";
+import {
+  proxyConfiguration,
+  trustedLocalOrigin
+} from "../../../lib/server-proxy";
 
 const CONTRACT_PATTERN = /^[A-Za-z]{1,3}\d{3,4}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -25,7 +28,6 @@ const ALLOWED_FORM_FIELDS = new Set([
   ,"strategyVersion"
 ]);
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 type Stage = "case" | "position" | "risk" | "images" | "analysis";
 
@@ -116,29 +118,6 @@ async function sha256Hex(value: string | ArrayBuffer): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-}
-
-function trustedLocalOrigin(request: Request): boolean {
-  const requestUrl = new URL(request.url);
-  const originHeader = request.headers.get("origin");
-  if (!originHeader) {
-    return false;
-  }
-  let originUrl: URL;
-  try {
-    originUrl = new URL(originHeader);
-  } catch {
-    return false;
-  }
-  const effectivePort = (url: URL) => (
-    url.port || (url.protocol === "https:" ? "443" : "80")
-  );
-  return (
-    LOOPBACK_HOSTS.has(requestUrl.hostname)
-    && LOOPBACK_HOSTS.has(originUrl.hostname)
-    && originUrl.protocol === requestUrl.protocol
-    && effectivePort(originUrl) === effectivePort(requestUrl)
-  );
 }
 
 async function upstreamDetail(response: Response): Promise<string> {

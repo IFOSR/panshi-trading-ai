@@ -12,7 +12,9 @@ from trading_agent.local_runtime import (
     CheckResult,
     LocalPaths,
     _create_virtual_environment,
+    _ensure_web_dependencies,
     _ensure_python_dependencies,
+    _install_dependencies,
     _managed_process_alive,
     _process_start_time,
     _runtime_lock,
@@ -532,6 +534,7 @@ def test_local_runtime_uses_web_port_8989_without_changing_api_port(
     commands = service_commands(LocalPaths.from_root(tmp_path))
 
     assert commands["api"][-1] == "8000"
+    assert "panshi.localhost" in commands["web"]
     assert commands["web"][-1] == "8989"
 
 
@@ -566,7 +569,10 @@ def test_playwright_keeps_isolated_test_web_port() -> None:
         encoding="utf-8"
     )
 
-    assert "npm run dev -- --port 3107" in config
+    assert (
+        "npm run dev -- --hostname panshi.localhost --port 3107"
+        in config
+    )
     assert 'port: 3107' in config
     assert 'baseURL: "http://127.0.0.1:3107"' in config
     assert "httpCredentials" not in config
@@ -595,6 +601,94 @@ def test_local_start_rebuilds_web_when_production_build_is_missing(
     _ensure_web_build(paths)
 
     assert commands == [["npm", "run", "build"]]
+
+
+def test_local_init_installs_web_dependencies_when_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = LocalPaths.from_root(tmp_path)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._run_checked",
+        lambda command, **kwargs: commands.append(list(command)),
+    )
+
+    _ensure_web_dependencies(paths)
+
+    assert commands == [["npm", "ci", "--prefer-offline"]]
+
+
+def test_local_init_reinstalls_web_dependencies_when_lockfile_is_newer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = LocalPaths.from_root(tmp_path)
+    package_lock = paths.web_root / "package-lock.json"
+    package_lock.parent.mkdir(parents=True)
+    package_lock.write_text("{}\n", encoding="utf-8")
+    install_lock = paths.web_root / "node_modules" / ".package-lock.json"
+    install_lock.parent.mkdir(parents=True)
+    install_lock.write_text("{}\n", encoding="utf-8")
+    os.utime(install_lock, (1, 1))
+    os.utime(package_lock, (2, 2))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._run_checked",
+        lambda command, **kwargs: commands.append(list(command)),
+    )
+
+    _ensure_web_dependencies(paths)
+
+    assert commands == [["npm", "ci", "--prefer-offline"]]
+
+
+def test_local_init_keeps_current_web_dependencies(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = LocalPaths.from_root(tmp_path)
+    package_lock = paths.web_root / "package-lock.json"
+    package_lock.parent.mkdir(parents=True)
+    package_lock.write_text("{}\n", encoding="utf-8")
+    install_lock = paths.web_root / "node_modules" / ".package-lock.json"
+    install_lock.parent.mkdir(parents=True)
+    install_lock.write_text("{}\n", encoding="utf-8")
+    os.utime(package_lock, (1, 1))
+    os.utime(install_lock, (2, 2))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._run_checked",
+        lambda command, **kwargs: commands.append(list(command)),
+    )
+
+    _ensure_web_dependencies(paths)
+
+    assert commands == []
+
+
+def test_local_init_rebuilds_web_after_dependencies_change(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    paths = LocalPaths.from_root(tmp_path)
+    force_values: list[bool] = []
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._ensure_python_dependencies",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._ensure_web_dependencies",
+        lambda _: True,
+    )
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._ensure_web_build",
+        lambda _, *, force=False: force_values.append(force),
+    )
+
+    _install_dependencies(paths)
+
+    assert force_values == [True]
 
 
 def test_local_start_does_not_rebuild_an_existing_web_build(

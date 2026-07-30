@@ -9,7 +9,7 @@ export default defineConfig({
       reuseExistingServer: false
     },
     {
-      command: "NEXT_DIST_DIR=.next-playwright TRADING_AGENT_ENVIRONMENT=local TRADING_API_URL=http://127.0.0.1:3199 TRADING_AGENT_API_TOKEN=test-api-token TRADING_AGENT_PRIVACY_REVIEW_TOKEN=test-privacy-token npm run dev -- --port 3107",
+      command: "NEXT_DIST_DIR=.next-playwright TRADING_AGENT_ENVIRONMENT=local TRADING_API_URL=http://127.0.0.1:3199 TRADING_AGENT_API_TOKEN=test-api-token TRADING_AGENT_PRIVACY_REVIEW_TOKEN=test-privacy-token npm run dev -- --hostname panshi.localhost --port 3107",
       port: 3107,
       reuseExistingServer: false
     }

@@ -1,6 +1,11 @@
 export const SESSION_COOKIE = "panshi_session";
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const LOOPBACK_HOSTS = new Set([
+  "127.0.0.1",
+  "localhost",
+  "panshi.localhost",
+  "[::1]"
+]);
 
 export function safeNextPath(value: string | null | undefined): string {
   if (
