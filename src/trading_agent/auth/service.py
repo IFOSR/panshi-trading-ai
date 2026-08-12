@@ -74,6 +74,7 @@ class AuthService:
             raise InvalidSession
         return {
             "username": session["username"],
+            "user_id": session["user_id"],
             "expires_at": session["expires_at"],
         }
 
