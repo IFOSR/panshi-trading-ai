@@ -19,6 +19,7 @@ dependencies = [
   "tqsdk>=3.10.1,<4",
   "tomli>=2.0; python_version < '3.11'",
   "uvicorn>=0.35",
+  "websockets>=12",
 ]
 
 [project.optional-dependencies]

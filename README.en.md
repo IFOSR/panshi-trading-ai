@@ -10,7 +10,7 @@ Panshi Trading AI is a desktop analysis and decision-support system. In a
 continuous conversation, a user can submit a question and complete market
 screenshots. The system performs:
 
-- direct Codex multimodal analysis of the original image;
+- direct DeepSeek multimodal analysis of the original image;
 - public market-data enrichment through TqSdk and AkShare;
 - data consistency and validity checks;
 - versioned deterministic strategy evaluation;
@@ -31,7 +31,7 @@ logic, independent risk controls, and an inspectable user experience.
 
 ### Direct original-image understanding
 
-The runtime sends the complete user screenshot directly to the Codex
+The runtime sends the complete user screenshot directly to the DeepSeek
 multimodal model. OpenCV, image slicing, local OCR, and coordinate
 reconstruction are not used as substitutes in the production evidence path.
 Contract, timeframe, candles, indicators, and surrounding UI context remain
@@ -70,11 +70,11 @@ can be installed, upgraded, disabled, and rolled back independently.
 flowchart TD
     U[User browser<br/>Question + original screenshots + private position facts]
     W[Next.js Web :8989<br/>Login, conversation, attachments, strategy selection]
-    A[FastAPI :8000<br/>Conversation, evidence, and analysis orchestration]
+    A[FastAPI :8005<br/>Conversation, evidence, and analysis orchestration]
 
     DB[(SQLite<br/>Users, sessions, cases, analysis versions)]
     IMG[(Original image storage<br/>.local/data/images)]
-    V[Codex multimodal model<br/>Direct original-image reading]
+    V[DeepSeek multimodal model<br/>Direct original-image reading]
     M[Free market data<br/>TqSdk primary / AkShare fallback]
     E[Evidence merge and validity<br/>Sources, conflicts, confidence, freshness]
     R[Strategy Registry]
@@ -105,7 +105,7 @@ flowchart TD
 | Next.js Web | SQLite login, continuous conversation, screenshot attachments, strategy selection, and history |
 | FastAPI | API authentication, original-image storage, case state, orchestration, and session management |
 | SQLite | Password hashes, session digests, case events, and analysis versions |
-| Codex | Reads original images and emits structured observations, visible text, confidence, and uncertainty |
+| DeepSeek | Reads original images and emits structured observations, visible text, confidence, and uncertainty |
 | TqSdk / AkShare | China-futures public data; TqSdk is optional and AkShare is the automatic fallback |
 | Evidence layer | Merges screenshots and structured data and detects conflicts, missing fields, close status, and quality |
 | Strategy Registry | Discovers, selects, and pins strategy plugin versions |
@@ -117,7 +117,7 @@ flowchart TD
 
 ```text
 User question and complete original screenshots
-  -> direct Codex multimodal extraction
+  -> direct DeepSeek multimodal extraction
   -> TqSdk / AkShare public-market enrichment
   -> evidence merge, provenance, and data-validity evaluation
   -> select and pin strategy ID and version
@@ -132,10 +132,10 @@ User question and complete original screenshots
 The recommended path is the Docker-free local lightweight runtime:
 
 ```text
-Browser -> Next.js :8989 -> FastAPI :8000
+Browser -> Next.js :8989 -> FastAPI :8005
                               |-> SQLite
                               |-> original-image directory
-                              |-> Codex CLI
+                              |-> DeepSeek API
                               `-> inline strategy analysis
 ```
 
@@ -150,9 +150,9 @@ Temporal, a separate worker, and an OTel Collector are not required.
 - Python 3.10 or newer;
 - Node.js 20 or newer;
 - npm and Git;
-- an executable Codex CLI;
+- an available DeepSeek API Key;
 - a model-provider API key available through an environment variable;
-- free local ports `8000` and `8989`.
+- free local ports `8005` and `8989`.
 
 Check the required commands:
 
@@ -161,7 +161,6 @@ python3 --version
 node --version
 npm --version
 git --version
-codex --version
 ```
 
 ### 2. Clone the repository
@@ -180,14 +179,13 @@ gh repo clone IFOSR/panshi-trading-ai
 cd panshi-trading-ai
 ```
 
-### 3. Configure Codex credentials
+### 3. Configure DeepSeek credentials
 
-Codex is the primary multimodal provider. Initialization reads
-`CODE_CLI_API_KEY` from the current shell:
+DeepSeek is the primary multimodal provider, with Kimi as the fallback. Initialization reads
+`DEEPSEEK_API_KEY` from the current shell:
 
 ```sh
-export CODE_CLI_API_KEY=<your-code-cli-api-key>
-codex --version
+export DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ```
 
 Never place a real key in the README, Git, `.env.example`, or a startup script.
@@ -196,10 +194,10 @@ Initialization writes the credential to the private mode-`0600` `.local/env`.
 For another compatible provider, update the initialized environment:
 
 ```sh
-TRADING_AGENT_CODEX_MODEL_PROVIDER=code-cli
-TRADING_AGENT_CODEX_PROVIDER_BASE_URL=https://your-provider.example/v1
-TRADING_AGENT_CODEX_PROVIDER_ENV_KEY=CODE_CLI_API_KEY
-CODE_CLI_API_KEY=<your-code-cli-api-key>
+TRADING_AGENT_DEEPSEEK_MODEL=deepseek-chat
+TRADING_AGENT_DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+TRADING_AGENT_DEEPSEEK_ENV_KEY=DEEPSEEK_API_KEY
+DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ```
 
 ### 4. Initialize
@@ -212,7 +210,7 @@ Run from the repository root:
 ```
 
 `init` creates the Python environment, installs dependencies, builds the Web
-application, generates local settings, initializes SQLite, and checks Codex
+application, generates local settings, initializes SQLite, and checks DeepSeek
 and market-data dependencies. Important local paths are:
 
 ```text
@@ -298,7 +296,7 @@ Do not change it to `true` in this release.
 Open:
 
 - Web: `http://127.0.0.1:8989`
-- API documentation: `http://127.0.0.1:8000/docs`
+- API documentation: `http://127.0.0.1:8005/docs`
 
 Check runtime status:
 
@@ -312,7 +310,7 @@ Check runtime status:
 2. Select a strategy and enter an analysis question.
 3. Attach one or two complete screenshots containing the contract, timeframe,
    and full chart context.
-4. The system sends the originals to Codex and enriches public market data.
+4. The system sends the originals to DeepSeek and enriches public market data.
 5. The conversation displays data validity, strategy milestones, risk
    constraints, and the final action.
 6. Ask follow-up questions about the conclusion, rules, evidence, or risk.
@@ -356,7 +354,7 @@ set +a
 ```sh
 ./trading-agent.sh stop
 git pull --ff-only
-export CODE_CLI_API_KEY=<your-code-cli-api-key>
+export DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ./bin/trading-agent-local init
 ./bin/trading-agent-local doctor
 ./trading-agent.sh start
@@ -364,10 +362,10 @@ export CODE_CLI_API_KEY=<your-code-cli-api-key>
 
 ## Troubleshooting
 
-### Codex is unavailable
+### DeepSeek is unavailable
 
 ```sh
-codex --version
+echo $DEEPSEEK_API_KEY
 ./bin/trading-agent-local doctor
 ```
 
@@ -390,7 +388,7 @@ tail -n 100 .local/logs/api.log
 ./bin/trading-agent-local doctor
 ```
 
-Confirm that port `8000` is free, the SQLite URL is absolute, and `.local/env`
+Confirm that port `8005` is free, the SQLite URL is absolute, and `.local/env`
 has the correct permissions.
 
 ### Login returns to the login page

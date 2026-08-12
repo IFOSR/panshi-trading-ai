@@ -9,7 +9,7 @@
 磐石交易AI是一套桌面端分析与决策支持系统。用户可以在持续对话中提交问题和完整
 行情截图，系统自动完成：
 
-- Codex 原图多模态识别；
+- DeepSeek 原图多模态识别；
 - TqSdk / AkShare 公开行情补全；
 - 数据一致性与有效性校验；
 - 版本化策略插件计算；
@@ -29,7 +29,7 @@
 
 ### 直接理解完整原图
 
-运行时把用户上传的完整截图直接交给 Codex 多模态模型。生产证据链不使用
+运行时把用户上传的完整截图直接交给 DeepSeek 多模态模型。生产证据链不使用
 OpenCV、图像切片、本地 OCR 或坐标重建来替代模型理解，保留合约、周期、K 线、
 指标和界面上下文。
 
@@ -62,11 +62,11 @@ OpenCV、图像切片、本地 OCR 或坐标重建来替代模型理解，保留
 flowchart TD
     U[用户浏览器<br/>问题 + 原始截图 + 私有持仓信息]
     W[Next.js Web :8989<br/>登录、对话、附件、策略选择]
-    A[FastAPI :8000<br/>会话、证据与分析编排]
+    A[FastAPI :8005<br/>会话、证据与分析编排]
 
     DB[(SQLite<br/>用户、会话、案例、分析版本)]
     IMG[(原图存储<br/>.local/data/images)]
-    V[Codex 多模态<br/>直接读取原图]
+    V[DeepSeek 多模态<br/>直接读取原图]
     M[免费市场数据<br/>TqSdk 主源 / AkShare 降级]
     E[证据合并与有效性校验<br/>来源、冲突、置信度、新鲜度]
     R[策略注册表<br/>Strategy Registry]
@@ -97,7 +97,7 @@ flowchart TD
 | Next.js Web | SQLite 账号登录、持续对话、截图附件、策略选择和历史记录 |
 | FastAPI | API 鉴权、原图保存、案例状态、分析编排和会话管理 |
 | SQLite | 保存用户密码哈希、会话摘要、案例事件和分析版本 |
-| Codex | 直接读取原图，输出结构化观察、可见文字、置信度和不确定项 |
+| DeepSeek | 直接读取原图，输出结构化观察、可见文字、置信度和不确定项 |
 | TqSdk / AkShare | 补充中国期货公开行情；TqSdk 可选，AkShare 自动降级 |
 | 证据层 | 合并截图与结构化行情，检测冲突、缺失、收盘状态和数据质量 |
 | 策略注册表 | 发现、选择并固定策略插件版本 |
@@ -109,7 +109,7 @@ flowchart TD
 
 ```text
 用户问题与完整原图
-  -> Codex 直接多模态抽取
+  -> DeepSeek 直接多模态抽取
   -> TqSdk / AkShare 自动补充公开行情
   -> 证据合并、来源追踪和数据有效性判断
   -> 选择并固定策略 ID 与版本
@@ -124,10 +124,10 @@ flowchart TD
 推荐使用不依赖 Docker 的本地轻量模式：
 
 ```text
-Browser -> Next.js :8989 -> FastAPI :8000
+Browser -> Next.js :8989 -> FastAPI :8005
                               |-> SQLite
                               |-> 原图目录
-                              |-> Codex CLI
+                              |-> DeepSeek API
                               `-> 进程内策略分析
 ```
 
@@ -142,9 +142,9 @@ Temporal、独立 Worker 或 OTel Collector。
 - Python 3.10 或更高版本；
 - Node.js 20 或更高版本；
 - npm、Git；
-- 可执行的 Codex CLI；
+- 可用的 DeepSeek API Key；
 - 可通过环境变量传入的模型供应商 API Key；
-- 空闲的本地端口 `8000` 和 `8989`。
+- 空闲的本地端口 `8005` 和 `8989`。
 
 检查基础命令：
 
@@ -153,7 +153,6 @@ python3 --version
 node --version
 npm --version
 git --version
-codex --version
 ```
 
 ### 2. 获取代码
@@ -172,26 +171,25 @@ gh repo clone IFOSR/panshi-trading-ai
 cd panshi-trading-ai
 ```
 
-### 3. 配置 Codex 凭据
+### 3. 配置 DeepSeek 凭据
 
-Codex 是默认且优先的多模态提供方。初始化程序从当前 shell 读取
-`CODE_CLI_API_KEY`：
+DeepSeek 是默认且优先的多模态提供方，Kimi 作为降级备选。初始化程序从当前
+shell 读取 `DEEPSEEK_API_KEY`：
 
 ```sh
-export CODE_CLI_API_KEY=<your-code-cli-api-key>
-codex --version
+export DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ```
 
 不要把真实 Key 写入 README、Git、`.env.example` 或启动脚本。初始化程序会把
 凭据写入权限为 `0600` 的私有 `.local/env`。
 
-如使用兼容供应商，在初始化后配置：
+如使用 OpenAI 兼容的 DeepSeek 网关，在初始化后配置：
 
 ```sh
-TRADING_AGENT_CODEX_MODEL_PROVIDER=code-cli
-TRADING_AGENT_CODEX_PROVIDER_BASE_URL=https://your-provider.example/v1
-TRADING_AGENT_CODEX_PROVIDER_ENV_KEY=CODE_CLI_API_KEY
-CODE_CLI_API_KEY=<your-code-cli-api-key>
+TRADING_AGENT_DEEPSEEK_MODEL=deepseek-chat
+TRADING_AGENT_DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+TRADING_AGENT_DEEPSEEK_ENV_KEY=DEEPSEEK_API_KEY
+DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ```
 
 ### 4. 初始化
@@ -204,7 +202,7 @@ CODE_CLI_API_KEY=<your-code-cli-api-key>
 ```
 
 `init` 会创建 Python 环境、安装依赖、构建前端、生成本地配置、初始化 SQLite，并
-检查 Codex 和市场数据依赖。主要本地文件如下：
+检查 DeepSeek 和市场数据依赖。主要本地文件如下：
 
 ```text
 .local/env                         私有运行配置和服务密钥
@@ -284,7 +282,7 @@ TRADING_AGENT_ENABLE_ORDER_EXECUTION=false
 启动后访问：
 
 - Web：`http://127.0.0.1:8989`
-- API 文档：`http://127.0.0.1:8000/docs`
+- API 文档：`http://127.0.0.1:8005/docs`
 
 检查状态：
 
@@ -297,7 +295,7 @@ TRADING_AGENT_ENABLE_ORDER_EXECUTION=false
 1. 使用 SQLite 账号登录 Web。
 2. 选择策略，输入分析问题。
 3. 上传一至两张包含合约、周期和完整图表上下文的行情截图。
-4. 系统直接使用 Codex 识别原图，并自动补充公开行情。
+4. 系统直接使用 DeepSeek 识别原图，并自动补充公开行情。
 5. 页面展示数据有效性、策略里程碑、风险约束和最终动作。
 6. 用户可以继续追问结论、步骤、证据或风险依据。
 7. 只有公开数据和截图仍无法消除的真实歧义才通过对话澄清。
@@ -346,10 +344,10 @@ export CODE_CLI_API_KEY=<your-code-cli-api-key>
 
 ## 故障排查
 
-### Codex 不可用
+### DeepSeek 不可用
 
 ```sh
-codex --version
+echo $DEEPSEEK_API_KEY
 ./bin/trading-agent-local doctor
 ```
 
@@ -371,7 +369,7 @@ tail -n 100 .local/logs/api.log
 ./bin/trading-agent-local doctor
 ```
 
-确认 `8000` 端口可用、SQLite 路径为绝对路径且 `.local/env` 权限正确。
+确认 `8005` 端口可用、SQLite 路径为绝对路径且 `.local/env` 权限正确。
 
 ### 登录后返回登录页
 
