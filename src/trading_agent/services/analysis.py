@@ -94,6 +94,13 @@ def build_analysis_payload(
         ).model_dump(mode="json"),
     }
     payload["change_report"] = build_change_report(previous_analysis, payload)
+    payload["entitlement_info"] = cast_mapping(
+        case_state.get("entitlement_check")
+    ) or {
+        "strategy_id": result.strategy_manifest.strategy_id,
+        "version": result.strategy_manifest.version,
+        "entitlement_id": None,
+    }
     return payload
 
 

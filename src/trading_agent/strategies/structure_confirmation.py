@@ -1,7 +1,12 @@
+from datetime import date
+
 from trading_agent.domain.enums import MilestoneStatus
 from trading_agent.strategy.context import StrategyContext
 from trading_agent.strategy.evaluator import evaluate_strategy
 from trading_agent.strategies.contracts import (
+    FactRequirement,
+    DataRequirement,
+    PerformanceTrack,
     StrategyInputSnapshot,
     StrategyManifest,
     StrategyRun,
@@ -32,7 +37,49 @@ class StructureConfirmationStrategy:
         supported_timeframes=["1d", "60m"],
         process_label="八步结构确认",
         risk_profile_id="china-futures-risk-v1",
+        # Phase 1: commercialization fields
+        pricing=None,  # 免费策略
+        performance_config=None,
     )
+
+    def required_facts(self, context: dict) -> list[FactRequirement]:
+        """声明当前策略需要哪些用户事实。"""
+        return [
+            FactRequirement(
+                field="contract",
+                label="分析标的",
+                required=True,
+                source=["user_input", "attachment"],
+                description="用户希望分析的具体合约或品种",
+            ),
+            FactRequirement(
+                field="position_direction",
+                label="当前持仓方向",
+                required=False,
+                source=["user_input"],
+                description="用于判断持仓是否与策略信号一致",
+            ),
+            FactRequirement(
+                field="timeframe",
+                label="分析周期",
+                required=False,
+                default="1d",
+                source=["user_input", "system_default"],
+            ),
+        ]
+
+    def required_data(self, context: dict) -> list[DataRequirement]:
+        """声明当前策略需要哪些系统数据。"""
+        return [
+            DataRequirement(
+                type="ohlcv",
+                timeframe="1d",
+                length=240,
+            ),
+            DataRequirement(
+                type="volume_profile",
+            ),
+        ]
 
     def evaluate(self, snapshot: StrategyInputSnapshot) -> StrategyRun:
         context = StrategyContext.model_validate(
@@ -103,4 +150,34 @@ class StructureConfirmationStrategy:
                 upgrade_conditions=["数据有效、价格确认且风险通过"],
                 invalidation_conditions=["结构失效或风险引擎否决"],
             ),
+        )
+
+    def track_performance(
+        self,
+        start_date: date,
+        end_date: date,
+        market_data: dict | None = None,
+    ) -> PerformanceTrack:
+        """生成指定时间段的策略表现跟踪数据。
+
+        当前版本返回结构确认策略的基础跟踪数据。
+        """
+        return PerformanceTrack(
+            strategy_id=self.manifest.strategy_id,
+            version=self.manifest.version,
+            start_date=start_date,
+            end_date=end_date,
+            signals=[
+                {
+                    "contract": "RB2610",
+                    "signal_date": start_date,
+                    "direction": "FLAT",
+                    "status": "open",
+                }
+            ],
+            summary={
+                "total_return": 0.0,
+                "signal_count": 1,
+                "win_rate": 0.0,
+            },
         )
