@@ -1,92 +1,90 @@
 import json
-from pathlib import Path
-from subprocess import CompletedProcess
 
 import pytest
 
 from trading_agent.conversation.models import ConversationRequest
 from trading_agent.providers.base import ProviderResponseError
-from trading_agent.providers.conversation import CodexConversationProvider
+from trading_agent.providers.conversation import DeepSeekConversationProvider
+from trading_agent.providers.deepseek import _HttpRunner, render_conversation_prompt
 
 
 def request() -> ConversationRequest:
     return ConversationRequest(
         case_id="case-1",
         source_analysis_id="analysis-1",
-        user_message="为什么不是继续持有？",
+        user_message="为什么结论是等待？",
         strategy_manifest={
             "strategy_id": "structure_confirmation",
             "display_name": "结构确认策略",
             "version": "1.0.0",
         },
-        decision={"action": "EXIT", "supporting_steps": [2, 3, 8]},
-        milestones=[
-            {
-                "number": 2,
-                "code": "MARKET_STATE",
-                "status": "CONFIRMED",
-                "result": "T-",
-            }
-        ],
-        rendered={"summary": "退出持仓"},
+        decision={
+            "action": "WAIT",
+            "market_state": "U",
+            "blocking_steps": [7],
+            "reason_codes": ["PRICE_NOT_CONFIRMED"],
+        },
+        milestones=[{"number": 7, "status": "BLOCKED", "result": "NOT_TRIGGERED"}],
+        rendered={"summary": "等待 60 分钟价格确认。"},
     )
 
 
-def test_codex_conversation_provider_uses_immutable_analysis_schema(
+def json_runner(payload: dict) -> _HttpRunner:
+    def complete(
+        messages: list[dict],
+        *,
+        model: str = "deepseek-chat",
+        temperature: float = 0.0,
+    ) -> str:
+        return json.dumps(payload, ensure_ascii=False)
+
+    runner = _HttpRunner()
+    runner.complete = complete  # type: ignore[method-assign]
+    return runner
+
+
+def valid_payload() -> dict:
+    return {
+        "answer": "因为第 7 步价格确认尚未触发。",
+        "suggested_questions": ["什么条件下会触发？"],
+    }
+
+
+def test_deepseek_conversation_provider_uses_immutable_analysis_schema(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
 
-    def runner(command, timeout, cwd, stdin, env):
-        captured.update(command=command, stdin=stdin)
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(
-            json.dumps(
-                {
-                    "answer": "第 2 步确认空头趋势，最终动作是退出。",
-                    "suggested_questions": ["什么条件下可以重新入场？"],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        return CompletedProcess(command, 0, "", "")
+    def complete(
+        messages: list[dict],
+        *,
+        model: str = "deepseek-chat",
+        temperature: float = 0.0,
+    ) -> str:
+        captured["messages"] = messages
+        captured["model"] = model
+        return json.dumps(valid_payload(), ensure_ascii=False)
 
-    monkeypatch.setenv("TEST_CODEX_KEY", "secret")
-    provider = CodexConversationProvider(
-        runner=runner,
-        model_provider="test-provider",
-        provider_base_url="https://provider.invalid/v1",
-        provider_env_key="TEST_CODEX_KEY",
-    )
+    runner = _HttpRunner()
+    runner.complete = complete  # type: ignore[method-assign]
 
+    provider = DeepSeekConversationProvider(model="deepseek-chat", runner=runner)
     reply = provider.reply(request())
 
-    command = captured["command"]
-    assert isinstance(command, list)
-    assert "--image" not in command
-    assert "--output-schema" in command
     assert reply.source_analysis_id == "analysis-1"
-    assert reply.provider == "codex"
-    assert "不得修改动作、策略、里程碑或风险结论" in str(captured["stdin"])
-    assert '"action":"EXIT"' in str(captured["stdin"])
+    assert reply.answer == "因为第 7 步价格确认尚未触发。"
+    assert reply.provider == "deepseek"
+    assert reply.model == "deepseek-chat"
+    assert captured["model"] == "deepseek-chat"
+    content = captured["messages"][0]["content"]
+    assert render_conversation_prompt(request()) in str(content)
 
 
-def test_codex_conversation_provider_rejects_invalid_response(monkeypatch) -> None:
-    def runner(command, timeout, cwd, stdin, env):
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(
-            json.dumps({"answer": "", "unexpected": "field"}),
-            encoding="utf-8",
-        )
-        return CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setenv("TEST_CODEX_KEY", "secret")
-    provider = CodexConversationProvider(
-        runner=runner,
-        model_provider="test-provider",
-        provider_base_url="https://provider.invalid/v1",
-        provider_env_key="TEST_CODEX_KEY",
+def test_deepseek_conversation_provider_rejects_invalid_response(
+    monkeypatch,
+) -> None:
+    provider = DeepSeekConversationProvider(
+        runner=json_runner({"answer": ""}),
     )
 
     with pytest.raises(ProviderResponseError):

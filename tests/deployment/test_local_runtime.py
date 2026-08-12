@@ -44,7 +44,7 @@ def test_local_init_creates_private_absolute_environment(tmp_path: Path) -> None
 
     values = initialize_local_environment(
         paths,
-        source_environment={"CODE_CLI_API_KEY": "local-provider-key"},
+        source_environment={"DEEPSEEK_API_KEY": "local-provider-key"},
         token_factory=iter(("api-secret", "privacy-secret")).__next__,
     )
 
@@ -59,7 +59,7 @@ def test_local_init_creates_private_absolute_environment(tmp_path: Path) -> None
     assert "TRADING_AGENT_WEB_USERNAME" not in values
     assert "TRADING_AGENT_WEB_PASSWORD" not in values
     assert values["TRADING_AGENT_PRIVACY_REVIEW_TOKEN"] == "privacy-secret"
-    assert values["CODE_CLI_API_KEY"] == "local-provider-key"
+    assert values["DEEPSEEK_API_KEY"] == "local-provider-key"
     assert "TEMPORAL_ADDRESS" not in values
     assert paths.environment_file.stat().st_mode & 0o777 == 0o600
     for directory in (
@@ -76,7 +76,7 @@ def test_local_init_preserves_existing_operator_configuration(tmp_path: Path) ->
     paths = LocalPaths.from_root(tmp_path)
     original = initialize_local_environment(
         paths,
-        source_environment={"CODE_CLI_API_KEY": "operator-provider-key"},
+        source_environment={"DEEPSEEK_API_KEY": "operator-provider-key"},
         token_factory=iter(
             ("operator-owned", "operator-password", "operator-privacy")
         ).__next__,
@@ -96,7 +96,7 @@ def test_local_init_removes_legacy_web_credentials(tmp_path: Path) -> None:
     paths = LocalPaths.from_root(tmp_path)
     values = initialize_local_environment(
         paths,
-        source_environment={"CODE_CLI_API_KEY": "operator-provider-key"},
+        source_environment={"DEEPSEEK_API_KEY": "operator-provider-key"},
         token_factory=iter(("api-secret", "privacy-secret")).__next__,
     )
     values["TRADING_AGENT_WEB_USERNAME"] = "operator"
@@ -164,12 +164,12 @@ def test_local_process_environment_forces_inline_analysis(tmp_path: Path) -> Non
                 "TRADING_AGENT_DATABASE_URL=sqlite+pysqlite:////tmp/local.db",
                     "TRADING_AGENT_IMAGE_ROOT=/tmp/local-images",
                     "TRADING_AGENT_MARKET_DATA_PROVIDER=free",
-                    "TRADING_AGENT_PRIMARY_VISION_PROVIDER=codex",
-                "TRADING_AGENT_CODEX_MODEL=gpt-5.6-sol",
-                "TRADING_AGENT_CODEX_MODEL_PROVIDER=code-cli",
-                "TRADING_AGENT_CODEX_PROVIDER_BASE_URL=https://provider.example/v1",
-                "TRADING_AGENT_CODEX_PROVIDER_ENV_KEY=CODE_CLI_API_KEY",
-                "CODE_CLI_API_KEY=test-key",
+                    "TRADING_AGENT_PRIMARY_VISION_PROVIDER=deepseek",
+                "TRADING_AGENT_DEEPSEEK_MODEL=deepseek-chat",
+                "TRADING_AGENT_DEEPSEEK_BASE_URL=https://api.deepseek.com/v1",
+                "TRADING_AGENT_DEEPSEEK_ENV_KEY=DEEPSEEK_API_KEY",
+                
+                "DEEPSEEK_API_KEY=test-key",
             )
         )
         + "\n",
@@ -185,7 +185,7 @@ def test_local_process_environment_forces_inline_analysis(tmp_path: Path) -> Non
     )
 
     assert environment["TRADING_AGENT_ENVIRONMENT"] == "local"
-    assert environment["TRADING_API_URL"] == "http://127.0.0.1:8000"
+    assert environment["TRADING_API_URL"] == "http://127.0.0.1:8005"
     assert environment["PYTHONPATH"].split(os.pathsep)[0] == str(paths.project_root / "src")
     assert "TEMPORAL_ADDRESS" not in environment
 
@@ -265,7 +265,7 @@ def test_local_init_installs_python_dependencies_only_when_missing(
     ]
 
 
-def test_local_services_use_only_api_web_sqlite_and_codex(tmp_path: Path) -> None:
+def test_local_services_use_only_api_web_sqlite_and_deepseek(tmp_path: Path) -> None:
     paths = LocalPaths.from_root(tmp_path)
 
     commands = service_commands(paths)
@@ -533,8 +533,8 @@ def test_local_runtime_uses_web_port_8989_without_changing_api_port(
 ) -> None:
     commands = service_commands(LocalPaths.from_root(tmp_path))
 
-    assert commands["api"][-1] == "8000"
-    assert "panshi.localhost" in commands["web"]
+    assert commands["api"][-1] == "8005"
+    assert "127.0.0.1" in commands["web"]
     assert commands["web"][-1] == "8989"
 
 
@@ -570,7 +570,7 @@ def test_playwright_keeps_isolated_test_web_port() -> None:
     )
 
     assert (
-        "npm run dev -- --hostname panshi.localhost --port 3107"
+        "npm run dev -- --hostname 127.0.0.1 --port 3107"
         in config
     )
     assert 'port: 3107' in config
@@ -792,7 +792,7 @@ def test_playwright_uses_an_isolated_next_build_directory() -> None:
 def test_local_environment_template_disables_distributed_runtime() -> None:
     assert "TRADING_AGENT_ENVIRONMENT=local" in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_ENABLE_ORDER_EXECUTION=false" in LOCAL_ENV_EXAMPLE
-    assert "TRADING_AGENT_PRIMARY_VISION_PROVIDER=codex" in LOCAL_ENV_EXAMPLE
+    assert "TRADING_AGENT_PRIMARY_VISION_PROVIDER=deepseek" in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED=false" in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_WEB_USERNAME" not in LOCAL_ENV_EXAMPLE
     assert "TRADING_AGENT_WEB_PASSWORD" not in LOCAL_ENV_EXAMPLE
@@ -834,7 +834,7 @@ def test_readiness_requires_an_expected_status() -> None:
         thread.join()
 
 
-def test_local_start_uses_the_public_login_page_for_readiness(
+def test_local_start_uses_home_page_for_readiness(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -851,7 +851,11 @@ def test_local_start_uses_the_public_login_page_for_readiness(
     )
     monkeypatch.setattr(
         "trading_agent.local_runtime._ensure_web_build",
-        lambda _: None,
+        lambda *_, **__: None,
+    )
+    monkeypatch.setattr(
+        "trading_agent.local_runtime._ensure_web_dependencies",
+        lambda _: False,
     )
     monkeypatch.setattr(
         "trading_agent.local_runtime.doctor_checks",
@@ -895,6 +899,6 @@ def test_local_start_uses_the_public_login_page_for_readiness(
     _start_runtime_unlocked(paths)
 
     assert readiness_checks[-1] == (
-        "http://127.0.0.1:8989/login",
+        "http://127.0.0.1:8989/",
         {200},
     )

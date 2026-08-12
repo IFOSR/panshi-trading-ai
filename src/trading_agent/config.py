@@ -8,12 +8,11 @@ class Settings(BaseSettings):
 
     environment: str = "test"
     enable_order_execution: bool = False
-    primary_vision_provider: str = "codex"
+    primary_vision_provider: str = "deepseek"
     fallback_vision_provider: str = "kimi"
-    codex_model: str = "gpt-5.6-sol"
-    codex_model_provider: str | None = None
-    codex_provider_base_url: str | None = None
-    codex_provider_env_key: str | None = None
+    deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_env_key: str = "DEEPSEEK_API_KEY"
     kimi_model: str = "default"
     kimi_external_isolation_verified: bool = False
     kimi_isolation_provider: str | None = None

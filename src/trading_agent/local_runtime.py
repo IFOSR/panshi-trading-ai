@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 
 API_HOST = "127.0.0.1"
-API_PORT = 8000
+API_PORT = 8005
 WEB_HOST = "127.0.0.1"
 WEB_BIND_HOST = "panshi.localhost"
 WEB_PORT = 8989
@@ -33,22 +33,20 @@ LOCAL_REQUIRED_SETTINGS = (
     "TRADING_AGENT_IMAGE_ROOT",
     "TRADING_AGENT_MARKET_DATA_PROVIDER",
     "TRADING_AGENT_PRIMARY_VISION_PROVIDER",
-    "TRADING_AGENT_CODEX_MODEL",
-    "TRADING_AGENT_CODEX_MODEL_PROVIDER",
-    "TRADING_AGENT_CODEX_PROVIDER_BASE_URL",
-    "TRADING_AGENT_CODEX_PROVIDER_ENV_KEY",
+    "TRADING_AGENT_DEEPSEEK_MODEL",
+    "TRADING_AGENT_DEEPSEEK_BASE_URL",
+    "TRADING_AGENT_DEEPSEEK_ENV_KEY",
     "TRADING_AGENT_API_TOKEN",
     "TRADING_AGENT_PRIVACY_REVIEW_TOKEN",
 )
 LOCAL_NON_SECRET_DEFAULTS = {
     "TRADING_AGENT_ENVIRONMENT": "local",
     "TRADING_AGENT_ENABLE_ORDER_EXECUTION": "false",
-    "TRADING_AGENT_PRIMARY_VISION_PROVIDER": "codex",
+    "TRADING_AGENT_PRIMARY_VISION_PROVIDER": "deepseek",
     "TRADING_AGENT_FALLBACK_VISION_PROVIDER": "kimi",
-    "TRADING_AGENT_CODEX_MODEL": "gpt-5.6-sol",
-    "TRADING_AGENT_CODEX_MODEL_PROVIDER": "code-cli",
-    "TRADING_AGENT_CODEX_PROVIDER_BASE_URL": "https://www.code-cli.cn/v1",
-    "TRADING_AGENT_CODEX_PROVIDER_ENV_KEY": "CODE_CLI_API_KEY",
+    "TRADING_AGENT_DEEPSEEK_MODEL": "deepseek-chat",
+    "TRADING_AGENT_DEEPSEEK_BASE_URL": "https://api.deepseek.com/v1",
+    "TRADING_AGENT_DEEPSEEK_ENV_KEY": "DEEPSEEK_API_KEY",
     "TRADING_AGENT_KIMI_MODEL": "default",
     "TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED": "false",
     "TRADING_AGENT_KIMI_ISOLATION_PROVIDER": "",
@@ -192,10 +190,10 @@ def _validate_local_environment(values: Mapping[str, str]) -> None:
     image_root = Path(values["TRADING_AGENT_IMAGE_ROOT"])
     if not image_root.is_absolute():
         raise ValueError("local image root must be an absolute path")
-    provider_env_key = values["TRADING_AGENT_CODEX_PROVIDER_ENV_KEY"]
+    provider_env_key = values["TRADING_AGENT_DEEPSEEK_ENV_KEY"]
     if not values.get(provider_env_key):
         raise ValueError(
-            f"Codex provider credential {provider_env_key} is not configured"
+            f"DeepSeek provider credential {provider_env_key} is not configured"
         )
 
 
@@ -214,7 +212,7 @@ def _local_default_values(
         "TRADING_AGENT_PRIVACY_REVIEW_TOKEN": token_factory(),
     }
     for key in (
-        "CODE_CLI_API_KEY",
+        "DEEPSEEK_API_KEY",
         "OPENAI_API_KEY",
         "TRADING_AGENT_TQSDK_USERNAME",
         "TRADING_AGENT_TQSDK_PASSWORD",
@@ -298,7 +296,7 @@ def service_commands(paths: LocalPaths) -> dict[str, list[str]]:
             "start",
             "--",
             "--hostname",
-            WEB_BIND_HOST,
+            WEB_HOST,
             "--port",
             str(WEB_PORT),
         ],
@@ -661,7 +659,6 @@ def doctor_checks(paths: LocalPaths) -> list[CheckResult]:
     python_ok = sys.version_info >= (3, 10)
     node_ok, node_detail = _command_version("node", "--version")
     npm_ok, npm_detail = _command_version("npm", "--version")
-    codex_ok, codex_detail = _command_version("codex", "--version")
     runtime_ok, runtime_detail = _python_runtime_available(paths)
     current_status = service_status(paths)
     database_url = values.get("TRADING_AGENT_DATABASE_URL", "")
@@ -679,7 +676,6 @@ def doctor_checks(paths: LocalPaths) -> list[CheckResult]:
         ),
         CheckResult("node", node_ok, node_detail),
         CheckResult("npm", npm_ok, npm_detail),
-        CheckResult("codex", codex_ok, codex_detail),
         CheckResult(
             "virtualenv",
             runtime_ok,
@@ -735,15 +731,15 @@ def doctor_checks(paths: LocalPaths) -> list[CheckResult]:
         CheckResult(
             "Kimi fallback",
             values.get("TRADING_AGENT_KIMI_EXTERNAL_ISOLATION_VERIFIED") != "true",
-            "disabled by default; Codex is primary",
+            "disabled by default; DeepSeek is primary",
             required=False,
         ),
     ]
-    provider_env_key = values.get("TRADING_AGENT_CODEX_PROVIDER_ENV_KEY")
+    provider_env_key = values.get("TRADING_AGENT_DEEPSEEK_ENV_KEY")
     if provider_env_key:
         checks.append(
             CheckResult(
-                "Codex provider credential",
+                "DeepSeek provider credential",
                 bool(values.get(provider_env_key)),
                 f"{provider_env_key} is configured"
                 if values.get(provider_env_key)
@@ -843,7 +839,8 @@ def start_runtime(paths: LocalPaths) -> None:
 def _start_runtime_unlocked(paths: LocalPaths) -> None:
     initialize_local_environment(paths)
     environment = build_process_environment(paths)
-    _ensure_web_build(paths)
+    dependencies_changed = _ensure_web_dependencies(paths)
+    _ensure_web_build(paths, force=dependencies_changed)
     checks = doctor_checks(paths)
     if not _print_checks(checks, sys.stdout):
         raise RuntimeError("local runtime preflight failed")
@@ -865,7 +862,7 @@ def _start_runtime_unlocked(paths: LocalPaths) -> None:
                 f"API failed to become ready; see {paths.log_file('api')}"
             )
         if not _wait_for_url(
-            f"http://{WEB_HOST}:{WEB_PORT}/login",
+            f"http://{WEB_HOST}:{WEB_PORT}/",
             expected_statuses={200},
         ):
             raise RuntimeError(

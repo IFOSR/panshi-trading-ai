@@ -64,6 +64,8 @@ def test_lists_registered_strategies_for_the_selector() -> None:
             "supported_timeframes": ["1d", "60m"],
             "process_label": "八步结构确认",
             "risk_profile_id": "china-futures-risk-v1",
+            "pricing": None,
+            "performance_config": None,
         }
     ]
 

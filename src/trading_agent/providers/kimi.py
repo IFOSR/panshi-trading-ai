@@ -20,7 +20,7 @@ from trading_agent.providers.base import (
     ProviderUnavailable,
     VisionRequest,
 )
-from trading_agent.providers.codex import ScreenshotExtraction, enforce_safe_usage
+from trading_agent.providers.extraction import ScreenshotExtraction, enforce_safe_usage
 from trading_agent.vision.image_quality import inspect_original_image
 from trading_agent.vision.prompts import provider_prompt_sha256, render_provider_prompt
 

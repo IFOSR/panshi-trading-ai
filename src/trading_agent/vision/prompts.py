@@ -77,7 +77,7 @@ def render_provider_prompt(
     image_suffixes: list[str] | None = None,
 ) -> str:
     template = resolve_prompt(version)
-    if provider == "codex":
+    if provider == "deepseek":
         return template
     if provider == "kimi":
         suffixes = image_suffixes or []

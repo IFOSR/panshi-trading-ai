@@ -33,7 +33,7 @@ def test_each_page_explains_the_logical_architecture_and_trust_chain() -> None:
         "Next.js",
         "FastAPI",
         "SQLite",
-        "Codex",
+        "DeepSeek",
         "TqSdk",
         "AkShare",
         "OpenCV",
@@ -66,8 +66,7 @@ def test_each_page_contains_an_executable_local_installation_path() -> None:
     shared = (
         "Python 3.10",
         "Node.js 20",
-        "codex --version",
-        "export CODE_CLI_API_KEY=<your-code-cli-api-key>",
+        "export DEEPSEEK_API_KEY=<your-deepseek-api-key>",
         "git clone https://github.com/IFOSR/panshi-trading-ai.git",
         "./bin/trading-agent-local init",
         "./bin/trading-agent-local doctor",
@@ -79,7 +78,7 @@ def test_each_page_contains_an_executable_local_installation_path() -> None:
         "./trading-agent.sh restart",
         "./bin/trading-agent-local status",
         "http://127.0.0.1:8989",
-        "http://127.0.0.1:8000/docs",
+        "http://127.0.0.1:8005/docs",
     )
 
     for text in shared:

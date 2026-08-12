@@ -1,6 +1,4 @@
 import json
-from pathlib import Path
-from subprocess import CompletedProcess
 
 import pytest
 
@@ -9,8 +7,9 @@ from trading_agent.providers.base import (
     ClarificationRequest,
     ProviderResponseError,
 )
-from trading_agent.providers.clarification import CodexClarificationProvider
+from trading_agent.providers.clarification import DeepSeekClarificationProvider
 from trading_agent.clarification.prompts import render_clarification_prompt
+from trading_agent.providers.deepseek import _HttpRunner
 
 
 def request() -> ClarificationRequest:
@@ -43,115 +42,100 @@ def request() -> ClarificationRequest:
     )
 
 
-def test_codex_clarification_provider_uses_strict_text_schema(
+def json_runner(payload: dict) -> _HttpRunner:
+    def complete(
+        messages: list[dict],
+        *,
+        model: str = "deepseek-chat",
+        temperature: float = 0.0,
+    ) -> str:
+        return json.dumps(payload, ensure_ascii=False)
+
+    runner = _HttpRunner()
+    runner.complete = complete  # type: ignore[method-assign]
+    return runner
+
+
+def valid_payload() -> dict:
+    return {
+        "facts": [
+            {
+                "question_id": "clarify-state-bar-closed",
+                "field": "state_bar_closed",
+                "value": True,
+                "explanation": "用户确认日线已收盘。",
+            },
+            {
+                "question_id": "clarify-open-interest-change",
+                "field": "open_interest_change",
+                "value": -4425,
+                "explanation": "用户提供持仓量减少 4425。",
+            },
+        ],
+        "unresolved_question_ids": [],
+        "interpretation": "用户补充了收盘状态和持仓量变化。",
+    }
+
+
+def test_deepseek_clarification_provider_uses_strict_text_schema(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
 
-    def runner(command, timeout, cwd, stdin, env):
-        captured.update(
-            command=command,
-            timeout=timeout,
-            cwd=cwd,
-            stdin=stdin,
-            env=env,
-        )
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(
-            json.dumps(
-                {
-                    "facts": [
-                        {
-                            "question_id": "clarify-state-bar-closed",
-                            "field": "state_bar_closed",
-                            "value": True,
-                            "explanation": "用户明确说明日线已收盘。",
-                        },
-                        {
-                            "question_id": "clarify-open-interest-change",
-                            "field": "open_interest_change",
-                            "value": -4425,
-                            "explanation": "用户说明持仓量减少 4425。",
-                        },
-                    ],
-                    "unresolved_question_ids": [],
-                    "interpretation": "日线已收盘，持仓量变化为 -4425。",
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        return CompletedProcess(command, 0, "", "")
+    def complete(
+        messages: list[dict],
+        *,
+        model: str = "deepseek-chat",
+        temperature: float = 0.0,
+    ) -> str:
+        captured["messages"] = messages
+        captured["model"] = model
+        return json.dumps(valid_payload(), ensure_ascii=False)
 
-    monkeypatch.setenv("TEST_CODEX_KEY", "secret")
-    provider = CodexClarificationProvider(
-        runner=runner,
-        model_provider="test-provider",
-        provider_base_url="https://provider.invalid/v1",
-        provider_env_key="TEST_CODEX_KEY",
-    )
+    runner = _HttpRunner()
+    runner.complete = complete  # type: ignore[method-assign]
 
+    provider = DeepSeekClarificationProvider(model="deepseek-chat", runner=runner)
     proposal = provider.interpret(request())
 
-    command = captured["command"]
-    assert isinstance(command, list)
-    assert "--image" not in command
-    assert command[command.index("--model") + 1] == "gpt-5.6-sol"
-    assert "--output-schema" in command
-    assert proposal.clarification_id == "clarification-1"
-    assert proposal.provider == "codex"
+    assert proposal.provider == "deepseek"
+    assert proposal.model == "deepseek-chat"
+    assert len(proposal.facts) == 2
+    assert proposal.facts[0].value is True
+    assert proposal.facts[1].value == -4425
     assert proposal.facts[0].resolves_blockers == ["BAR_CLOSE_UNKNOWN"]
-    assert "只提取用户明确提供" in str(captured["stdin"])
+    assert "用户补充" in proposal.interpretation
+    assert captured["model"] == "deepseek-chat"
+    content = captured["messages"][0]["content"]
+    assert render_clarification_prompt(request()) in str(content)
 
 
-def test_codex_clarification_provider_rejects_invalid_response(monkeypatch) -> None:
-    def runner(command, timeout, cwd, stdin, env):
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text("{}", encoding="utf-8")
-        return CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setenv("TEST_CODEX_KEY", "secret")
-    provider = CodexClarificationProvider(
-        runner=runner,
-        model_provider="test-provider",
-        provider_base_url="https://provider.invalid/v1",
-        provider_env_key="TEST_CODEX_KEY",
+def test_deepseek_clarification_provider_rejects_invalid_response(
+    monkeypatch,
+) -> None:
+    provider = DeepSeekClarificationProvider(
+        runner=json_runner({"facts": "not-a-list"}),
     )
 
     with pytest.raises(ProviderResponseError):
         provider.interpret(request())
 
 
-def test_codex_clarification_provider_rejects_fact_outside_open_questions(
+def test_deepseek_clarification_provider_rejects_fact_outside_open_questions(
     monkeypatch,
 ) -> None:
-    def runner(command, timeout, cwd, stdin, env):
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(
-            json.dumps(
-                {
-                    "facts": [
-                        {
-                            "question_id": "invented-question",
-                            "field": "contract",
-                            "value": "CF2609",
-                            "explanation": "越界字段。",
-                        }
-                    ],
-                    "unresolved_question_ids": [],
-                    "interpretation": "错误输出。",
-                }
-            ),
-            encoding="utf-8",
-        )
-        return CompletedProcess(command, 0, "", "")
+    payload = valid_payload()
+    payload["facts"] = [
+        {
+            "question_id": "unrelated-question",
+            "field": "unknown_field",
+            "value": 1,
+            "explanation": "不在开放问题范围内。",
+        }
+    ]
 
-    monkeypatch.setenv("TEST_CODEX_KEY", "secret")
-    provider = CodexClarificationProvider(
-        runner=runner,
-        model_provider="test-provider",
-        provider_base_url="https://provider.invalid/v1",
-        provider_env_key="TEST_CODEX_KEY",
+    provider = DeepSeekClarificationProvider(
+        runner=json_runner(payload),
     )
 
     with pytest.raises(ProviderResponseError):
@@ -161,83 +145,61 @@ def test_codex_clarification_provider_rejects_fact_outside_open_questions(
 def test_price_confirmation_question_accepts_direction_and_pattern_facts(
     monkeypatch,
 ) -> None:
-    price_request = request().model_copy(
-        update={
-            "questions": [
-                ClarificationQuestion(
-                    question_id="clarify-price-confirmation",
-                    field="price_confirmation",
-                    milestone_number=7,
-                    uncertainty="执行周期价格确认未知。",
-                    question="是否形成价格确认，并说明方向和形态？",
-                    answer_examples=["向下突破后回踩未站回"],
-                    blocking_issues=["PRICE_NOT_CONFIRMED"],
-                )
+    req = request()
+    req.questions.append(
+        ClarificationQuestion(
+            question_id="clarify-price-confirmation",
+            field="price_confirmation",
+            milestone_number=7,
+            uncertainty="确认状态未知。",
+            question="执行周期是否出现突破？",
+            answer_examples=["突破后回踩守住"],
+            blocking_issues=["PRICE_NOT_CONFIRMED"],
+            allowed_fact_fields=[
+                "price_confirmation",
+                "price_confirmation_direction",
+                "price_confirmation_type",
             ],
-            "user_message": "已形成向下确认，形态是回踩未站回。",
-        }
-    )
-
-    def runner(command, timeout, cwd, stdin, env):
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(
-            json.dumps(
-                {
-                    "facts": [
-                        {
-                            "question_id": "clarify-price-confirmation",
-                            "field": "price_confirmation",
-                            "value": True,
-                            "explanation": "用户确认已经形成价格确认。",
-                        },
-                        {
-                            "question_id": "clarify-price-confirmation",
-                            "field": "price_confirmation_direction",
-                            "value": "BEARISH",
-                            "explanation": "用户说明确认方向向下。",
-                        },
-                        {
-                            "question_id": "clarify-price-confirmation",
-                            "field": "price_confirmation_type",
-                            "value": "PULLBACK",
-                            "explanation": "用户说明形态为回踩未站回。",
-                        },
-                    ],
-                    "unresolved_question_ids": [],
-                    "interpretation": "执行周期形成向下回踩确认。",
-                }
-            ),
-            encoding="utf-8",
         )
-        return CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setenv("TEST_CODEX_KEY", "secret")
-    provider = CodexClarificationProvider(
-        runner=runner,
-        model_provider="test-provider",
-        provider_base_url="https://provider.invalid/v1",
-        provider_env_key="TEST_CODEX_KEY",
     )
-
-    proposal = provider.interpret(price_request)
-
-    assert [fact.field for fact in proposal.facts] == [
-        "price_confirmation",
-        "price_confirmation_direction",
-        "price_confirmation_type",
+    payload = valid_payload()
+    payload["facts"] = [
+        {
+            "question_id": "clarify-price-confirmation",
+            "field": "price_confirmation",
+            "value": True,
+            "explanation": "60 分钟突破后回踩守住。",
+        },
+        {
+            "question_id": "clarify-price-confirmation",
+            "field": "price_confirmation_direction",
+            "value": "BULLISH",
+            "explanation": "向上突破。",
+        },
+        {
+            "question_id": "clarify-price-confirmation",
+            "field": "price_confirmation_type",
+            "value": "PULLBACK",
+            "explanation": "回踩未跌回结构内。",
+        },
     ]
+
+    provider = DeepSeekClarificationProvider(
+        runner=json_runner(payload),
+    )
+    proposal = provider.interpret(req)
+
+    assert len(proposal.facts) == 3
+    assert all(
+        fact.question_id == "clarify-price-confirmation"
+        for fact in proposal.facts
+    )
 
 
 def test_clarification_prompt_defines_strategy_enum_mappings() -> None:
     prompt = render_clarification_prompt(request())
 
-    assert "LONG_BUILD_SHORT_COVER" in prompt
-    assert "SHORT_BUILD_LONG_EXIT" in prompt
-    assert "POSITION_BUILDING" in prompt
-    assert "POSITION_LIQUIDATION" in prompt
-    assert "多头减仓" in prompt
-    assert "price_confirmation_direction" in prompt
+    assert "BULLISH" in prompt
+    assert "BEARISH" in prompt
+    assert "BREAKOUT" in prompt
     assert "PULLBACK" in prompt
-    assert "price_confirmation: true 或 false" in prompt
-    assert "open_interest_change: 只能输出数值" in prompt
-    assert "拆成三个独立 fact" in prompt

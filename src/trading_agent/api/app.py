@@ -42,8 +42,8 @@ from trading_agent.providers.base import (
     ProviderUnavailable,
     VisionProvider,
 )
-from trading_agent.providers.clarification import CodexClarificationProvider
-from trading_agent.providers.conversation import CodexConversationProvider
+from trading_agent.providers.clarification import DeepSeekClarificationProvider
+from trading_agent.providers.conversation import DeepSeekConversationProvider
 from trading_agent.services.analysis import build_analysis_payload
 from trading_agent.services.clarification import ClarificationService
 from trading_agent.services.evidence_pipeline import extract_case_evidence
@@ -61,6 +61,12 @@ from trading_agent.strategies.registry import (
     StrategyRegistry,
     configured_strategy_registry,
 )
+
+from trading_agent.store.service import StrategyStoreService
+from trading_agent.entitlement.service import EntitlementService
+from trading_agent.order.service import OrderService
+from trading_agent.order.models import OrderCreateRequest
+from trading_agent.fact_extractor.extractor import FactExtractor
 
 
 TemporalExecutor = Callable[[AnalysisCommand], Awaitable[dict[str, object]]]
@@ -243,6 +249,45 @@ def _purge_quarantined_images(operation_root: Path) -> None:
         trash_root.rmdir()
 
 
+def _seed_strategies(engine, registry) -> None:
+    """Sync strategies from registry into the database store tables."""
+    from trading_agent.db.models import StrategyRecord, StrategyVersionRecord
+    from sqlalchemy.orm import Session
+    with Session(engine) as session:
+        for manifest in registry.manifests():
+            if manifest.status == "disabled":
+                continue
+            existing = session.get(StrategyRecord, manifest.strategy_id)
+            if existing is None:
+                session.add(StrategyRecord(
+                    strategy_id=manifest.strategy_id,
+                    display_name=manifest.display_name,
+                    category=manifest.process_label,
+                    supported_markets=manifest.supported_markets,
+                    supported_timeframes=manifest.supported_timeframes,
+                    status=manifest.status,
+                    entrypoint=manifest.entrypoint,
+                    risk_profile_id=manifest.risk_profile_id,
+                    process_label=manifest.process_label,
+                ))
+            version_id = f"{manifest.strategy_id}@{manifest.version}"
+            existing_ver = session.get(StrategyVersionRecord, version_id)
+            if existing_ver is None:
+                pricing = manifest.pricing
+                session.add(StrategyVersionRecord(
+                    version_id=version_id,
+                    strategy_id=manifest.strategy_id,
+                    version=manifest.version,
+                    manifest=manifest.model_dump(mode="json"),
+                    pricing_type=pricing.type if pricing else "free",
+                    monthly_price=pricing.monthly_price if pricing else None,
+                    yearly_price=pricing.yearly_price if pricing else None,
+                    lifetime_price=pricing.lifetime_price if pricing else None,
+                    status=manifest.status,
+                ))
+        session.commit()
+
+
 def _recover_quarantined_images(
     image_root: Path,
     existing_case_ids: set[str],
@@ -409,6 +454,7 @@ def create_app(
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     registry = strategy_registry or configured_strategy_registry()
+    _seed_strategies(engine, registry)
     workflow = AnalysisWorkflow(strategy_registry=registry)
     image_root = (
         storage_root
@@ -425,21 +471,19 @@ def create_app(
     settings = Settings()
     clarification_service = ClarificationService(
         clarification_provider
-        or CodexClarificationProvider(
-            model=settings.codex_model,
-            model_provider=settings.codex_model_provider,
-            provider_base_url=settings.codex_provider_base_url,
-            provider_env_key=settings.codex_provider_env_key,
+        or DeepSeekClarificationProvider(
+            model=settings.deepseek_model,
+            base_url=settings.deepseek_base_url,
+            env_key=settings.deepseek_env_key,
         ),
         workflow=workflow,
     )
     conversation_service = ConversationService(
         conversation_provider
-        or CodexConversationProvider(
-            model=settings.codex_model,
-            model_provider=settings.codex_model_provider,
-            provider_base_url=settings.codex_provider_base_url,
-            provider_env_key=settings.codex_provider_env_key,
+        or DeepSeekConversationProvider(
+            model=settings.deepseek_model,
+            base_url=settings.deepseek_base_url,
+            env_key=settings.deepseek_env_key,
         )
     )
     resolver = market_data_resolver or configured_market_data_resolver()
@@ -503,6 +547,10 @@ def create_app(
     def command_in_progress(exc: CommandInProgress) -> HTTPException:
         return HTTPException(409, f"command already in progress: {exc}")
 
+    def _is_free_strategy(plugin) -> bool:
+        pricing = plugin.manifest.pricing
+        return pricing is None or pricing.type == "free"
+
     def default_strategy_summary() -> dict[str, str]:
         manifest = registry.default().manifest
         return {
@@ -564,6 +612,103 @@ def create_app(
             if manifest.status != "disabled"
         ]
 
+    @app.get("/v1/store/strategies")
+    def list_store_strategies() -> list[dict]:
+        with sessions() as session:
+            store = StrategyStoreService(session)
+            cards = store.list_strategies()
+            return [card.model_dump(mode="json") for card in cards]
+
+    @app.get("/v1/store/strategies/{strategy_id}")
+    def get_store_strategy(
+        strategy_id: str,
+        version: str | None = None,
+    ) -> dict:
+        with sessions() as session:
+            store = StrategyStoreService(session)
+            detail = store.get_strategy_detail(strategy_id, version)
+            if detail is None:
+                raise HTTPException(404, "strategy not found")
+            return detail.model_dump(mode="json")
+
+    @app.get("/v1/entitlements")
+    def list_entitlements(
+        x_panshi_session: str | None = Header(default=None),
+    ) -> list[dict]:
+        with sessions() as session:
+            with session.begin():
+                try:
+                    user = AuthService(session).validate_session(x_panshi_session)
+                except InvalidSession as exc:
+                    raise HTTPException(401, "invalid session") from exc
+            svc = EntitlementService(session)
+            ents = svc.list_user_entitlements(user["user_id"])
+            return [e.model_dump(mode="json") for e in ents]
+
+    @app.get("/v1/entitlements/{strategy_id}/check")
+    def check_entitlement(
+        strategy_id: str,
+        version: str | None = None,
+        x_panshi_session: str | None = Header(default=None),
+    ) -> dict:
+        with sessions() as session:
+            with session.begin():
+                try:
+                    user = AuthService(session).validate_session(x_panshi_session)
+                except InvalidSession as exc:
+                    raise HTTPException(401, "invalid session") from exc
+            svc = EntitlementService(session)
+            result = svc.check_access(user["user_id"], strategy_id, version)
+            return result.model_dump(mode="json")
+
+    @app.post("/v1/orders")
+    def create_order(
+        request: OrderCreateRequest,
+        x_panshi_session: str | None = Header(default=None),
+    ) -> dict:
+        with sessions() as session:
+            with session.begin():
+                try:
+                    user = AuthService(session).validate_session(x_panshi_session)
+                except InvalidSession as exc:
+                    raise HTTPException(401, "invalid session") from exc
+                svc = OrderService(session)
+                order = svc.create_order(user["user_id"], request)
+                return order.model_dump(mode="json")
+
+    @app.post("/v1/orders/{order_id}/paid")
+    def mark_order_paid(order_id: str) -> dict:
+        with sessions() as session:
+            with session.begin():
+                svc = OrderService(session)
+                try:
+                    order = svc.mark_paid(order_id)
+                except ValueError as exc:
+                    raise HTTPException(404, str(exc)) from exc
+            return order.model_dump(mode="json")
+
+    @app.post("/v1/admin/performance/update")
+    def update_performance_tracking() -> dict:
+        """每日定时任务：更新所有 stable 策略的最近三个月表现数据。"""
+        updated = 0
+        for manifest in registry.manifests():
+            if manifest.status == "disabled":
+                continue
+            try:
+                plugin = registry.resolve(manifest.strategy_id)
+            except StrategyNotFound:
+                continue
+            from datetime import date, timedelta
+            end = date.today()
+            start = end - timedelta(days=90)
+            with sessions() as session:
+                with session.begin():
+                    from trading_agent.performance.tracker import PerformanceTracker
+                    tracker = PerformanceTracker(session)
+                    tracker.track_strategy(plugin, start, end)
+                    updated += 1
+        return {"updated": updated}
+
     @app.get("/v1/cases")
     def list_cases() -> list[dict]:
         with sessions() as session:
@@ -611,6 +756,7 @@ def create_app(
     def create_case(
         request: CreateCaseRequest,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_panshi_session: str | None = Header(default=None),
     ) -> dict:
         parsed = parse_user_message(request.message) if request.message else None
         try:
@@ -621,6 +767,33 @@ def create_app(
             )
         except StrategyNotFound as exc:
             raise HTTPException(400, f"strategy not found: {exc}") from exc
+
+        # Resolve user_id from session (optional for backward compatibility)
+        user_id: str | None = None
+        if x_panshi_session:
+            with sessions() as session:
+                with session.begin():
+                    try:
+                        user = AuthService(session).validate_session(x_panshi_session)
+                        user_id = user["user_id"]
+                    except InvalidSession:
+                        pass  # Non-authenticated usage is allowed for free strategies
+
+        # Authorization check for paid strategies
+        if user_id and not _is_free_strategy(selected_strategy):
+            with sessions() as session:
+                ent_svc = EntitlementService(session)
+                check = ent_svc.check_access(
+                    user_id,
+                    selected_strategy.manifest.strategy_id,
+                    selected_strategy.manifest.version,
+                )
+                if not check.accessible:
+                    raise HTTPException(
+                        402,
+                        f"请先购买 {selected_strategy.manifest.display_name} 策略",
+                    )
+
         contract = request.contract or (parsed.get("contract") if parsed else None)
         position = parsed.get("position") if parsed else None
         risk = parsed.get("risk") if parsed else None
@@ -659,7 +832,7 @@ def create_app(
                             return replayed
                     try:
                         with session.begin_nested():
-                            return repo.create_case(
+                            state = repo.create_case(
                                 request.instrument,
                                 contract,
                                 case_id=deterministic_case_id,
@@ -679,6 +852,9 @@ def create_app(
                                     ),
                                 },
                             )
+                            if user_id:
+                                state["user_id"] = user_id
+                            return state
                     except IntegrityError:
                         replayed = replay_or_conflict(
                             repo.get_case(deterministic_case_id or "")
@@ -761,6 +937,7 @@ def create_app(
             default=None,
             alias="Idempotency-Key",
         ),
+        x_panshi_session: str | None = Header(default=None),
     ) -> dict:
         key = require_key(idempotency_key)
         owner_id = str(uuid4())
@@ -773,6 +950,23 @@ def create_app(
             "version": plugin.manifest.version,
             "display_name": plugin.manifest.display_name,
         }
+        # Authorization check: free strategies skip, paid ones require entitlement
+        if not _is_free_strategy(plugin):
+            with sessions() as session:
+                try:
+                    user = AuthService(session).validate_session(
+                        x_panshi_session,
+                    )
+                except InvalidSession as exc:
+                    raise HTTPException(401, "authentication required") from exc
+                ent_svc = EntitlementService(session)
+                check = ent_svc.check_access(
+                    user["user_id"],
+                    request.strategy_id,
+                    request.version,
+                )
+                if not check.accessible:
+                    raise HTTPException(402, f"请先购买 {plugin.manifest.display_name} 策略")
         try:
             with sessions() as session:
                 with session.begin():
@@ -885,6 +1079,42 @@ def create_app(
                         owner_id,
                     )
             raise
+
+    @app.post("/v1/cases/{case_id}/extract-facts")
+    def extract_facts(
+        case_id: str,
+        x_panshi_session: str | None = Header(default=None),
+    ) -> dict:
+        with sessions() as session:
+            repo = CaseRepository(session)
+            state = repo.get_case(case_id)
+            if state is None:
+                raise HTTPException(404, "case not found")
+
+            strategy_info = state.get("strategy", dict(LEGACY_STRATEGY_SUMMARY))
+            sid = strategy_info.get("strategy_id", "structure_confirmation")
+            sv = strategy_info.get("version", "1.0.0")
+
+            try:
+                plugin = registry.resolve(sid, sv)
+            except StrategyNotFound as exc:
+                raise HTTPException(400, f"strategy not found: {exc}") from exc
+
+            extractor = FactExtractor(plugin)
+            messages = state.get("messages", [])
+            images = state.get("images", [])
+            last_user_msg = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    last_user_msg = msg.get("content", "")
+                    break
+
+            result = extractor.extract(
+                message=last_user_msg,
+                conversation_history=messages,
+                attachments=images,
+            )
+            return result.model_dump(mode="json")
 
     @app.post("/v1/cases/{case_id}/messages")
     def post_conversation_message(
