@@ -1,14 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import type {
   ConversationSummary,
-  StrategyManifest
+  StrategyManifest,
+  UserEntitlement
 } from "../lib/api";
 import { ConversationSidebar } from "./conversation-sidebar";
-import { StrategySelector } from "./strategy-selector";
+import { StrategySelector, strategyAccess } from "./strategy-selector";
 
 type SubmissionStatus = "pending" | "running" | "completed" | "failed";
 
@@ -24,10 +26,12 @@ const PENDING_CASE_KEY = "panshi.pendingCaseId";
 
 export function AnalysisInput({
   strategies,
-  conversations
+  conversations,
+  entitlements = []
 }: {
   strategies: StrategyManifest[];
   conversations: ConversationSummary[];
+  entitlements?: UserEntitlement[];
 }) {
   const router = useRouter();
   const submissionId = useRef<string | null>(null);
@@ -47,6 +51,14 @@ export function AnalysisInput({
     status: SubmissionStatus;
     message: string;
   }> | null>(null);
+
+  const selectedStrategy = strategies.find(
+    (strategy) => `${strategy.strategyId}@${strategy.version}` === strategyValue
+  );
+  const selectedAccess = selectedStrategy
+    ? strategyAccess(selectedStrategy, entitlements)
+    : { accessible: true, label: "", variant: "free" as const };
+  const canSubmit = selectedAccess.accessible;
 
   useEffect(() => {
     setRecoveryCaseId(sessionStorage.getItem(PENDING_CASE_KEY));
@@ -171,6 +183,10 @@ export function AnalysisInput({
     <main className="chat-shell chat-shell--home">
       <ConversationSidebar conversations={conversations} />
       <section className="chat-workspace home-chat">
+        <nav className="home-top-nav">
+          <Link href="/store">策略商店</Link>
+          <Link href="/my-strategies">我的策略</Link>
+        </nav>
         <header className="home-chat__header">
           <span>CHINA FUTURES · MULTIMODAL</span>
           <h1>磐石交易AI</h1>
@@ -231,19 +247,29 @@ export function AnalysisInput({
             </label>
             <StrategySelector
               disabled={submitting}
+              entitlements={entitlements}
               onSelected={(strategy) => setStrategyValue(
                 `${strategy.strategyId}@${strategy.version}`
               )}
+              onUnauthorized={() => {}}
               strategies={strategies}
               value={strategyValue}
             />
             <button
-              disabled={submitting || files.length === 0 || !privacyConfirmed}
+              disabled={submitting || files.length === 0 || !privacyConfirmed || !canSubmit}
               type="submit"
             >
               {submitting ? "分析中" : "发送并分析"}
             </button>
           </div>
+          {!selectedAccess.accessible && selectedStrategy ? (
+            <p className="strategy-access-hint">
+              {selectedStrategy.displayName} 需要购买后才能使用。
+              <a href={`/store/${encodeURIComponent(selectedStrategy.strategyId)}`}>
+                去策略商店购买 →
+              </a>
+            </p>
+          ) : null}
           <label className="privacy-line">
             <input
               aria-label="已确认截图不含无关个人敏感信息"

@@ -28,8 +28,6 @@ export function ConversationSidebar({
   const [pending, setPending] = useState<PendingDeletion | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [username, setUsername] = useState<string | null>(null);
-  const [accountError, setAccountError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const fallbackFocusRef = useRef<HTMLElement | null>(null);
@@ -38,37 +36,6 @@ export function ConversationSidebar({
   useEffect(() => {
     setItems(conversations);
   }, [conversations]);
-
-  useEffect(() => {
-    let active = true;
-    void fetch("/api/auth/session", { cache: "no-store" })
-      .then(async (response) => (
-        response.ok
-          ? await response.json() as { username: string }
-          : null
-      ))
-      .then((session) => {
-        if (active) setUsername(session?.username ?? null);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  async function logout() {
-    setAccountError(null);
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) {
-        setAccountError("退出失败，认证服务暂时不可用，请重试。");
-        return;
-      }
-      router.replace("/login");
-      router.refresh();
-    } catch {
-      setAccountError("退出失败，认证服务暂时不可用，请重试。");
-    }
-  }
 
   useEffect(() => {
     if (sessionStorage.getItem(FOCUS_NEW_CHAT_KEY) !== "true") return;
@@ -187,6 +154,10 @@ export function ConversationSidebar({
         <span>PANSHI TRADING AI</span>
       </Link>
       <Link className="new-chat" href="/" ref={newChatRef}>＋ 新建分析</Link>
+      <nav className="sidebar-nav">
+        <Link href="/store">策略商店</Link>
+        <Link href="/my-strategies">我的策略</Link>
+      </nav>
       <div className="conversation-list">
         <div className="conversation-list__header">
           <p>最近对话</p>
@@ -246,12 +217,6 @@ export function ConversationSidebar({
         ) : null}
       </div>
       <footer className="sidebar-account">
-        <div data-testid="current-user">
-          <span>当前用户</span>
-          <strong>{username ?? "正在验证"}</strong>
-        </div>
-        <button onClick={() => void logout()} type="button">退出登录</button>
-        {accountError ? <p role="alert">{accountError}</p> : null}
         <small>本地轻量模式 · 端口 8989</small>
       </footer>
       {pending ? (

@@ -8,10 +8,43 @@ import {
   useState
 } from "react";
 
-import type { StrategyManifest } from "../lib/api";
+import type { StrategyManifest, UserEntitlement } from "../lib/api";
 
 function valueOf(strategy: StrategyManifest): string {
   return `${strategy.strategyId}@${strategy.version}`;
+}
+
+function isFreeStrategy(strategy: StrategyManifest): boolean {
+  return !strategy.pricing || strategy.pricing.type === "free";
+}
+
+function findEntitlement(
+  strategy: StrategyManifest,
+  entitlements: UserEntitlement[] | undefined
+): UserEntitlement | undefined {
+  return entitlements?.find(
+    (item) => item.strategy_id === strategy.strategyId
+      && item.version === strategy.version
+      && item.status === "active"
+  );
+}
+
+export function strategyAccess(
+  strategy: StrategyManifest,
+  entitlements: UserEntitlement[] | undefined
+): { accessible: boolean; label: string; variant: "free" | "owned" | "none" } {
+  if (isFreeStrategy(strategy)) {
+    return { accessible: true, label: "免费", variant: "free" };
+  }
+  const entitlement = findEntitlement(strategy, entitlements);
+  if (entitlement) {
+    return {
+      accessible: true,
+      label: entitlement.access_type === "onetime" ? "永久" : "订阅中",
+      variant: "owned"
+    };
+  }
+  return { accessible: false, label: "需购买", variant: "none" };
 }
 
 function statusLabel(status: StrategyManifest["status"]): string {
@@ -27,13 +60,17 @@ export function StrategySelector({
   value,
   caseId,
   disabled,
-  onSelected
+  entitlements,
+  onSelected,
+  onUnauthorized
 }: {
   strategies: StrategyManifest[];
   value: string;
   caseId?: string;
   disabled?: boolean;
+  entitlements?: UserEntitlement[];
   onSelected?: (strategy: StrategyManifest) => void;
+  onUnauthorized?: (strategy: StrategyManifest) => void;
 }) {
   const router = useRouter();
   const listboxId = useId();
@@ -98,6 +135,12 @@ export function StrategySelector({
       closeList();
       return;
     }
+    const access = strategyAccess(strategy, entitlements);
+    if (!access.accessible) {
+      closeList();
+      onUnauthorized?.(strategy);
+      return;
+    }
     const previousValue = selected;
     setSelected(nextValue);
     setOpen(false);
@@ -140,6 +183,8 @@ export function StrategySelector({
     }
   }
 
+  const currentAccess = current ? strategyAccess(current, entitlements) : null;
+
   return (
     <div className="strategy-selector" ref={rootRef}>
       <span>分析策略</span>
@@ -175,6 +220,7 @@ export function StrategySelector({
           {current ? (
             <small>
               v{current.version} · {statusLabel(current.status)}
+              {currentAccess ? ` · ${currentAccess.label}` : null}
             </small>
           ) : null}
         </span>
@@ -190,6 +236,7 @@ export function StrategySelector({
           {strategies.map((strategy, index) => {
             const strategyValue = valueOf(strategy);
             const isSelected = strategyValue === selected;
+            const access = strategyAccess(strategy, entitlements);
             return (
               <button
                 aria-selected={isSelected}
@@ -222,6 +269,7 @@ export function StrategySelector({
                   <strong>{strategy.displayName}</strong>
                   <small>
                     v{strategy.version} · {statusLabel(strategy.status)}
+                    {" "}· <em className={`strategy-selector__access strategy-selector__access--${access.variant}`}>{access.label}</em>
                   </small>
                 </span>
                 <b aria-hidden="true">{isSelected ? "✓" : ""}</b>

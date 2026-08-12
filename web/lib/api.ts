@@ -126,6 +126,7 @@ export type StrategyManifest = {
   processLabel: string;
   supportedMarkets: string[];
   supportedTimeframes: string[];
+  pricing?: StrategyPricing;
 };
 
 export type ConversationMessage = {
@@ -733,6 +734,7 @@ type ApiStrategyManifest = {
   process_label: string;
   supported_markets: string[];
   supported_timeframes: string[];
+  pricing?: ApiStrategyPricing;
 };
 
 function mapStrategy(item: ApiStrategyManifest): StrategyManifest {
@@ -743,7 +745,8 @@ function mapStrategy(item: ApiStrategyManifest): StrategyManifest {
     status: item.status,
     processLabel: item.process_label,
     supportedMarkets: item.supported_markets,
-    supportedTimeframes: item.supported_timeframes
+    supportedTimeframes: item.supported_timeframes,
+    pricing: item.pricing ? mapPricing(item.pricing) ?? undefined : undefined
   };
 }
 
@@ -859,3 +862,430 @@ export async function getConversation(
     return null;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 策略商店、授权、订单相关类型和 API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type StrategyPricing = {
+  type: "free" | "onetime" | "subscription";
+  monthly_price: number | null;
+  yearly_price: number | null;
+  lifetime_price: number | null;
+};
+
+export type RecentPerformancePreview = {
+  period: string;
+  total_return: number | null;
+  signal_count: number;
+  win_rate: number | null;
+  max_drawdown: number | null;
+};
+
+export type StrategyStoreCard = {
+  strategy_id: string;
+  version: string;
+  display_name: string;
+  category: string | null;
+  supported_markets: string[];
+  supported_timeframes: string[];
+  pricing: StrategyPricing | null;
+  recent_performance: RecentPerformancePreview | null;
+};
+
+export type PerformanceSignal = {
+  contract: string;
+  signal_date: string;
+  direction: string;
+  entry_price: number | null;
+  exit_price: number | null;
+  return_pct: number | null;
+  status: string;
+  closed_date: string | null;
+};
+
+export type PerformanceSummary = {
+  strategy_id: string;
+  version: string;
+  period: string;
+  start_date: string;
+  end_date: string;
+  total_return: number | null;
+  annualized_return: number | null;
+  max_drawdown: number | null;
+  signal_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number | null;
+  avg_win: number | null;
+  avg_loss: number | null;
+  equity_curve: Array<{ date: string; value: number }> | null;
+  signals: PerformanceSignal[];
+};
+
+export type StrategyStoreDetail = StrategyStoreCard & {
+  description: string | null;
+  status: "stable" | "test" | "disabled";
+  recent_performance: PerformanceSummary | null;
+};
+
+export type UserEntitlement = {
+  entitlement_id: string;
+  strategy_id: string;
+  version: string;
+  display_name?: string;
+  access_type: "free" | "onetime" | "subscription";
+  status: "active" | "expired" | "revoked";
+  expires_at: string | null;
+};
+
+export type EntitlementCheck = {
+  accessible: boolean;
+  reason?: string;
+  entitlement_id: string | null;
+  access_type: string | null;
+  expires_at: string | null;
+};
+
+export type Order = {
+  order_id: string;
+  strategy_id: string;
+  version: string;
+  pricing_type: "free" | "onetime" | "subscription";
+  subscription_period: "monthly" | "yearly" | null;
+  amount: number;
+  currency: string;
+  status: "pending" | "paid" | "refunded" | "cancelled";
+  paid_at: string | null;
+  created_at: string;
+};
+
+type ApiStrategyPricing = {
+  type: "free" | "onetime" | "subscription";
+  monthly_price: number | null;
+  yearly_price: number | null;
+  lifetime_price: number | null;
+};
+
+type ApiRecentPerformancePreview = {
+  period: string;
+  total_return: number | null;
+  signal_count: number;
+  win_rate: number | null;
+  max_drawdown: number | null;
+};
+
+type ApiStrategyStoreCard = {
+  strategy_id: string;
+  version: string;
+  display_name: string;
+  category: string | null;
+  supported_markets: string[];
+  supported_timeframes: string[];
+  pricing: ApiStrategyPricing | null;
+  recent_performance: ApiRecentPerformancePreview | null;
+};
+
+type ApiPerformanceSignal = {
+  contract: string;
+  signal_date: string;
+  direction: string;
+  entry_price: number | null;
+  exit_price: number | null;
+  return_pct: number | null;
+  status: string;
+  closed_date: string | null;
+};
+
+type ApiPerformanceSummary = {
+  strategy_id: string;
+  version: string;
+  period: string;
+  start_date: string;
+  end_date: string;
+  total_return: number | null;
+  annualized_return: number | null;
+  max_drawdown: number | null;
+  signal_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number | null;
+  avg_win: number | null;
+  avg_loss: number | null;
+  equity_curve: Array<{ date: string; value: number }> | null;
+  signals: ApiPerformanceSignal[];
+};
+
+type ApiStrategyStoreDetail = ApiStrategyStoreCard & {
+  description: string | null;
+  status: "stable" | "test" | "disabled";
+  recent_performance: ApiPerformanceSummary | null;
+};
+
+type ApiEntitlement = {
+  entitlement_id: string;
+  strategy_id: string;
+  version: string;
+  access_type: "free" | "onetime" | "subscription";
+  status: "active" | "expired" | "revoked";
+  expires_at: string | null;
+};
+
+type ApiEntitlementCheck = {
+  accessible: boolean;
+  reason?: string;
+  entitlement_id: string | null;
+  access_type: string | null;
+  expires_at: string | null;
+};
+
+type ApiOrder = {
+  order_id: string;
+  strategy_id: string;
+  version: string;
+  pricing_type: "free" | "onetime" | "subscription";
+  subscription_period: "monthly" | "yearly" | null;
+  amount: number;
+  currency: string;
+  status: "pending" | "paid" | "refunded" | "cancelled";
+  paid_at: string | null;
+  created_at: string;
+};
+
+function mapPricing(item: ApiStrategyPricing | null): StrategyPricing | null {
+  if (!item) return null;
+  return {
+    type: item.type,
+    monthly_price: item.monthly_price,
+    yearly_price: item.yearly_price,
+    lifetime_price: item.lifetime_price
+  };
+}
+
+function mapRecentPerformancePreview(
+  item: ApiRecentPerformancePreview | null
+): RecentPerformancePreview | null {
+  if (!item) return null;
+  return {
+    period: item.period,
+    total_return: item.total_return,
+    signal_count: item.signal_count,
+    win_rate: item.win_rate,
+    max_drawdown: item.max_drawdown
+  };
+}
+
+function mapPerformanceSummary(item: ApiPerformanceSummary | null): PerformanceSummary | null {
+  if (!item) return null;
+  return {
+    strategy_id: item.strategy_id,
+    version: item.version,
+    period: item.period,
+    start_date: item.start_date,
+    end_date: item.end_date,
+    total_return: item.total_return,
+    annualized_return: item.annualized_return,
+    max_drawdown: item.max_drawdown,
+    signal_count: item.signal_count,
+    win_count: item.win_count,
+    loss_count: item.loss_count,
+    win_rate: item.win_rate,
+    avg_win: item.avg_win,
+    avg_loss: item.avg_loss,
+    equity_curve: item.equity_curve,
+    signals: item.signals.map((signal) => ({
+      contract: signal.contract,
+      signal_date: signal.signal_date,
+      direction: signal.direction,
+      entry_price: signal.entry_price,
+      exit_price: signal.exit_price,
+      return_pct: signal.return_pct,
+      status: signal.status,
+      closed_date: signal.closed_date
+    }))
+  };
+}
+
+function mapStoreCard(item: ApiStrategyStoreCard): StrategyStoreCard {
+  return {
+    strategy_id: item.strategy_id,
+    version: item.version,
+    display_name: item.display_name,
+    category: item.category,
+    supported_markets: item.supported_markets,
+    supported_timeframes: item.supported_timeframes,
+    pricing: mapPricing(item.pricing),
+    recent_performance: mapRecentPerformancePreview(item.recent_performance)
+  };
+}
+
+function mapStoreDetail(item: ApiStrategyStoreDetail): StrategyStoreDetail {
+  return {
+    ...mapStoreCard(item),
+    description: item.description,
+    status: item.status,
+    recent_performance: mapPerformanceSummary(item.recent_performance)
+  };
+}
+
+function mapEntitlement(item: ApiEntitlement): UserEntitlement {
+  return {
+    entitlement_id: item.entitlement_id,
+    strategy_id: item.strategy_id,
+    version: item.version,
+    access_type: item.access_type,
+    status: item.status,
+    expires_at: item.expires_at
+  };
+}
+
+export async function getStoreStrategies(): Promise<StrategyStoreCard[]> {
+  const configuration = serverConfiguration();
+  if (!configuration) return [];
+  try {
+    const response = await fetch(`${configuration.baseUrl}/v1/store/strategies`, {
+      headers: { Authorization: `Bearer ${configuration.apiToken}` },
+      cache: "no-store"
+    });
+    if (!response.ok) return [];
+    const items = await response.json() as ApiStrategyStoreCard[];
+    return items.map(mapStoreCard);
+  } catch {
+    return [];
+  }
+}
+
+export async function getStoreStrategyDetail(
+  strategyId: string,
+  version?: string
+): Promise<StrategyStoreDetail | null> {
+  const configuration = serverConfiguration();
+  if (!configuration) return null;
+  try {
+    const query = version ? `?version=${encodeURIComponent(version)}` : "";
+    const response = await fetch(
+      `${configuration.baseUrl}/v1/store/strategies/${encodeURIComponent(strategyId)}${query}`,
+      { headers: { Authorization: `Bearer ${configuration.apiToken}` }, cache: "no-store" }
+    );
+    if (!response.ok) return null;
+    return mapStoreDetail(await response.json() as ApiStrategyStoreDetail);
+  } catch {
+    return null;
+  }
+}
+
+export async function getMyEntitlements(): Promise<UserEntitlement[]> {
+  const configuration = serverConfiguration();
+  if (!configuration) return [];
+  try {
+    const response = await fetch(`${configuration.baseUrl}/v1/entitlements`, {
+      headers: { Authorization: `Bearer ${configuration.apiToken}` },
+      cache: "no-store"
+    });
+    if (!response.ok) return [];
+    const items = await response.json() as { entitlements: ApiEntitlement[] };
+    return items.entitlements.map(mapEntitlement);
+  } catch {
+    return [];
+  }
+}
+
+export async function checkEntitlement(
+  strategyId: string,
+  version?: string
+): Promise<EntitlementCheck> {
+  const configuration = serverConfiguration();
+  if (!configuration) {
+    return { accessible: false, entitlement_id: null, access_type: null, expires_at: null };
+  }
+  try {
+    const query = version ? `?version=${encodeURIComponent(version)}` : "";
+    const response = await fetch(
+      `${configuration.baseUrl}/v1/entitlements/${encodeURIComponent(strategyId)}/check${query}`,
+      { headers: { Authorization: `Bearer ${configuration.apiToken}` }, cache: "no-store" }
+    );
+    if (!response.ok) {
+      return { accessible: false, entitlement_id: null, access_type: null, expires_at: null };
+    }
+    const item = await response.json() as ApiEntitlementCheck;
+    return {
+      accessible: item.accessible,
+      reason: item.reason,
+      entitlement_id: item.entitlement_id,
+      access_type: item.access_type,
+      expires_at: item.expires_at
+    };
+  } catch {
+    return { accessible: false, entitlement_id: null, access_type: null, expires_at: null };
+  }
+}
+
+export async function createOrder(
+  strategyId: string,
+  version: string,
+  pricingType: "free" | "onetime" | "subscription",
+  subscriptionPeriod?: "monthly" | "yearly"
+): Promise<Order | null> {
+  const configuration = serverConfiguration();
+  if (!configuration) return null;
+  try {
+    const response = await fetch(`${configuration.baseUrl}/v1/orders`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${configuration.apiToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        strategy_id: strategyId,
+        version: version,
+        pricing_type: pricingType,
+        subscription_period: subscriptionPeriod ?? null
+      })
+    });
+    if (!response.ok) return null;
+    return await response.json() as ApiOrder;
+  } catch {
+    return null;
+  }
+}
+
+export async function markOrderPaid(orderId: string): Promise<Order | null> {
+  const configuration = serverConfiguration();
+  if (!configuration) return null;
+  try {
+    const response = await fetch(
+      `${configuration.baseUrl}/v1/orders/${encodeURIComponent(orderId)}/paid`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${configuration.apiToken}` }
+      }
+    );
+    if (!response.ok) return null;
+    return await response.json() as ApiOrder;
+  } catch {
+    return null;
+  }
+}
+
+export function formatPriceYuan(fen: number | null): string {
+  if (fen === null || fen === undefined) return "—";
+  return `¥${(fen / 100).toFixed(2)}`;
+}
+
+export function formatPercent(value: number | null): string {
+  if (value === null || value === undefined) return "—";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+export function formatPercentNoDecimal(value: number | null): string {
+  if (value === null || value === undefined) return "—";
+  return `${Math.round(value * 100)}%`;
+}
+
+export function formatDate(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return date.toLocaleDateString("zh-CN");
+}
+

@@ -8,12 +8,13 @@ import type {
   ConversationMessage,
   ConversationSummary,
   ConversationView,
-  StrategyManifest
+  StrategyManifest,
+  UserEntitlement
 } from "../lib/api";
 import { ConversationSidebar } from "./conversation-sidebar";
 import { DecisionSummary } from "./decision-summary";
 import { StrategyAuditDrawer } from "./strategy-audit-drawer";
-import { StrategySelector } from "./strategy-selector";
+import { StrategySelector, strategyAccess } from "./strategy-selector";
 
 type PendingClarification = {
   clarificationId: string;
@@ -54,12 +55,14 @@ export function TradingChat({
   caseView,
   conversation,
   conversations,
+  entitlements,
   strategies
 }: {
   caseId: string;
   caseView: CaseView;
   conversation: ConversationView;
   conversations: ConversationSummary[];
+  entitlements: UserEntitlement[];
   strategies: StrategyManifest[];
 }) {
   const router = useRouter();
@@ -70,6 +73,9 @@ export function TradingChat({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
+  const [unauthorizedStrategy, setUnauthorizedStrategy] = useState(
+    null as StrategyManifest | null
+  );
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const [clarificationProposal, setClarificationProposal] = (
     useState<PendingClarification | null>(() => pendingClarification(caseView))
@@ -228,7 +234,9 @@ export function TradingChat({
           </div>
           <StrategySelector
             caseId={caseId}
+            entitlements={entitlements}
             onSelected={(strategy) => {
+              setUnauthorizedStrategy(null);
               setMessages((current) => [...current, {
                 messageId: `strategy:${crypto.randomUUID()}`,
                 role: "system",
@@ -243,6 +251,25 @@ export function TradingChat({
                   strategy_version: strategy.version
                 }
               }]);
+            }}
+            onUnauthorized={(strategy) => {
+              const access = strategyAccess(strategy, entitlements);
+              setMessages((current) => [...current, {
+                messageId: `strategy:unauthorized:${crypto.randomUUID()}`,
+                role: "system",
+                messageType: "STRATEGY_UNAUTHORIZED",
+                content: (
+                  `${strategy.displayName}（v${strategy.version}）${access.label}。`
+                  + `前往策略商店购买后可使用。`
+                ),
+                createdAt: new Date().toISOString(),
+                analysisId: null,
+                metadata: {
+                  strategy_id: strategy.strategyId,
+                  strategy_version: strategy.version
+                }
+              }]);
+              setUnauthorizedStrategy(strategy);
             }}
             strategies={strategies}
             value={strategyValue}
@@ -262,6 +289,22 @@ export function TradingChat({
             </button>
           </div>
         </header>
+        {unauthorizedStrategy ? (
+          <div className="chat-unauthorized-banner">
+            <span>
+              {unauthorizedStrategy.displayName} 需要购买后才能在此会话中使用。
+            </span>
+            <a
+              href={`/store/${encodeURIComponent(unauthorizedStrategy.strategyId)}`}
+              onClick={(event) => {
+                event.preventDefault();
+                router.push(`/store/${encodeURIComponent(unauthorizedStrategy.strategyId)}`);
+              }}
+            >
+              去策略商店购买 →
+            </a>
+          </div>
+        ) : null}
         <div className="chat-thread">
           {messages.map((item) => (
             <article

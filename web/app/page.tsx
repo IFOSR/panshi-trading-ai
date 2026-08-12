@@ -1,16 +1,18 @@
 import { AnalysisInput } from "../components/analysis-input";
-import { getRecentConversations, getStrategies } from "../lib/api";
+import { getMyEntitlements, getRecentConversations, getStrategies } from "../lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const [strategies, conversations] = await Promise.all([
+  const [strategies, conversations, entitlements] = await Promise.all([
     getStrategies(),
-    getRecentConversations()
+    getRecentConversations(),
+    getMyEntitlements()
   ]);
   return (
     <AnalysisInput
       conversations={conversations}
+      entitlements={entitlements}
       strategies={strategies}
     />
   );

@@ -1,17 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import {
-  SESSION_COOKIE,
-  validateSessionToken
-} from "./lib/auth";
-
-const PUBLIC_PATHS = new Set([
-  "/login",
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/api/auth/session"
-]);
-
+/**
+ * 本地访问中间件（已取消登录强制）：
+ * - 仅保留 loopback 来源检查（127.0.0.1 / localhost / panshi.localhost）
+ * - 不再校验会话，所有请求直接放行
+ */
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const suppliedHost = request.headers.get("host");
   let headerHostname = "";
@@ -38,48 +31,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
       headers: { "Cache-Control": "no-store" }
     });
   }
-  if (PUBLIC_PATHS.has(request.nextUrl.pathname)) {
-    return NextResponse.next();
-  }
-  const apiRequest = request.nextUrl.pathname.startsWith("/api/");
-  const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token) {
-    if (apiRequest) {
-      return NextResponse.json(
-        { detail: "authentication required" },
-        { status: 401 }
-      );
-    }
-    const login = new URL("/login", request.url);
-    login.searchParams.set(
-      "next",
-      `${request.nextUrl.pathname}${request.nextUrl.search}`
-    );
-    return NextResponse.redirect(login);
-  }
-  const session = await validateSessionToken(token);
-  if (session.status === "valid") return NextResponse.next();
-  if (apiRequest) {
-    return NextResponse.json(
-      {
-        detail: session.status === "unavailable"
-          ? "authentication service unavailable"
-          : "authentication required"
-      },
-      { status: session.status === "unavailable" ? 503 : 401 }
-    );
-  }
-  const login = new URL("/login", request.url);
-  login.searchParams.set(
-    "next",
-    `${request.nextUrl.pathname}${request.nextUrl.search}`
-  );
-  if (session.status === "unavailable") {
-    login.searchParams.set("service", "unavailable");
-  }
-  const response = NextResponse.redirect(login);
-  if (session.status === "invalid") response.cookies.delete(SESSION_COOKIE);
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {

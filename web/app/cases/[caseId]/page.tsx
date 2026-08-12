@@ -4,6 +4,7 @@ import { TradingChat } from "../../../components/trading-chat";
 import {
   getCaseView,
   getConversation,
+  getMyEntitlements,
   getRecentConversations,
   getStrategies
 } from "../../../lib/api";
@@ -14,11 +15,12 @@ export default async function CasePage({
   params: Promise<{ caseId: string }>;
 }) {
   const { caseId } = await params;
-  const [result, conversation, conversations, strategies] = await Promise.all([
+  const [result, conversation, conversations, strategies, entitlements] = await Promise.all([
     getCaseView(caseId),
     getConversation(caseId),
     getRecentConversations(),
-    getStrategies()
+    getStrategies(),
+    getMyEntitlements()
   ]);
   if (result.status !== "ready" || !conversation) {
     const errorMessage = result.status === "ready"
@@ -49,6 +51,7 @@ export default async function CasePage({
       caseView={result.data}
       conversation={conversation}
       conversations={conversations}
+      entitlements={entitlements}
       strategies={strategies}
     />
   );
